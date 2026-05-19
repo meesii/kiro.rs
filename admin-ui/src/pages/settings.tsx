@@ -131,10 +131,28 @@ export function SettingsPage() {
 }
 
 /**
- * 生成唯一 ID
+ * 生成唯一 ID（UUID v4，兼容所有浏览器）
  */
 function gen_id(): string {
-    return crypto.randomUUID();
+    // crypto.randomUUID() 在非安全上下文（HTTP）或旧浏览器中不可用
+    // 使用 crypto.getRandomValues() 作为兼容方案（IE11+）
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+        const arr = crypto.getRandomValues(new Uint8Array(16));
+        arr[6] = (arr[6] & 0x0f) | 0x40;
+        arr[8] = (arr[8] & 0x3f) | 0x80;
+        return [...arr]
+            .map((b, i) => {
+                const hex = b.toString(16).padStart(2, '0');
+                return [4, 6, 8, 10].includes(i) ? '-' + hex : hex;
+            })
+            .join('');
+    }
+    // 最终兜底：Math.random()
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
 }
 
 /**
