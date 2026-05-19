@@ -514,6 +514,8 @@ export function EditMachineIdDialog({
         try {
             const generated = await generate_machine_id();
             set_machine_id(generated);
+        } catch {
+            toast.error('生成 Machine ID 失败');
         } finally {
             set_generating(false);
         }
