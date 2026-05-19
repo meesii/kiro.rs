@@ -4,6 +4,20 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// 关键词替换配置条目
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeywordReplacement {
+    /// 唯一标识
+    pub id: String,
+    /// 匹配模式
+    pub pattern: String,
+    /// 替换内容
+    pub replacement: String,
+    /// 是否为正则替换
+    pub is_regex: bool,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TlsBackend {
@@ -109,6 +123,18 @@ pub struct Config {
     #[serde(default)]
     pub endpoints: HashMap<String, serde_json::Value>,
 
+    /// SQLite 数据库文件路径（可选，默认为 conversations.db）
+    #[serde(default)]
+    pub db_path: Option<String>,
+
+    /// 关键词替换列表
+    #[serde(default)]
+    pub keyword_replacements: Vec<KeywordReplacement>,
+
+    /// 关键词替换功能总开关
+    #[serde(default)]
+    pub keyword_replacement_enabled: bool,
+
     /// 配置文件路径（运行时元数据，不写入 JSON）
     #[serde(skip)]
     config_path: Option<PathBuf>,
@@ -184,6 +210,9 @@ impl Default for Config {
             extract_thinking: default_extract_thinking(),
             default_endpoint: default_endpoint(),
             endpoints: HashMap::new(),
+            db_path: None,
+            keyword_replacements: Vec::new(),
+            keyword_replacement_enabled: false,
             config_path: None,
         }
     }

@@ -2,6 +2,7 @@ mod admin;
 mod admin_ui;
 mod anthropic;
 mod common;
+pub mod db;
 mod http_client;
 mod kiro;
 mod model;
@@ -60,14 +61,24 @@ async fn main() {
         if kiro_api_key.is_empty() {
             tracing::warn!("KIRO_API_KEY 环境变量已设置但为空，视为未配置");
         } else {
-            tracing::info!("检测到 KIRO_API_KEY 环境变量，添加 API Key 凭据（最高优先级）");
-            let api_key_cred = KiroCredentials {
-                kiro_api_key: Some(kiro_api_key),
-                auth_method: Some("api_key".to_string()),
-                priority: 0,
-                ..Default::default()
-            };
-            credentials_list.insert(0, api_key_cred);
+            // 去重：检查 credentials.json 中是否已存在相同的 kiroApiKey
+            let already_exists = credentials_list.iter().any(|c| {
+                c.kiro_api_key.as_deref() == Some(kiro_api_key.as_str())
+            });
+            if already_exists {
+                tracing::info!(
+                    "KIRO_API_KEY 环境变量对应的 API Key 凭据已存在于配置文件中，跳过重复添加"
+                );
+            } else {
+                tracing::info!("检测到 KIRO_API_KEY 环境变量，添加 API Key 凭据（最高优先级）");
+                let api_key_cred = KiroCredentials {
+                    kiro_api_key: Some(kiro_api_key),
+                    auth_method: Some("api_key".to_string()),
+                    priority: 0,
+                    ..Default::default()
+                };
+                credentials_list.insert(0, api_key_cred);
+            }
         }
     }
 
@@ -157,11 +168,27 @@ async fn main() {
         tls_backend: config.tls_backend,
     });
 
+    // 初始化对话数据库
+    let db = {
+        let db_path = config.db_path.clone().unwrap_or_else(|| "conversations.db".to_string());
+        match db::ConversationDb::init(&db_path) {
+            Ok(db) => {
+                tracing::info!("对话数据库已初始化: {}", db_path);
+                Some(db)
+            }
+            Err(e) => {
+                tracing::warn!("对话数据库初始化失败（对话将不会被保存）: {}", e);
+                None
+            }
+        }
+    };
+
     // 构建 Anthropic API 路由（profile_arn 由 provider 层根据实际凭据动态注入）
     let anthropic_app = anthropic::create_router_with_provider(
         &api_key,
         Some(kiro_provider),
         config.extract_thinking,
+        db.clone(),
     );
 
     // 构建 Admin API 路由（如果配置了非空的 admin_api_key）
@@ -179,7 +206,9 @@ async fn main() {
         } else {
             let admin_service =
                 admin::AdminService::new(token_manager.clone(), endpoint_names.clone());
-            let admin_state = admin::AdminState::new(admin_key, admin_service);
+            // 启动时刷新所有凭据余额
+            admin_service.refresh_all_balances().await;
+            let admin_state = admin::AdminState::new(admin_key, admin_service).with_db(db.clone());
             let admin_app = admin::create_admin_router(admin_state);
 
             // 创建 Admin UI 路由

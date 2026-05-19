@@ -23,7 +23,7 @@ use crate::kiro::model::token_refresh::{
     IdcRefreshRequest, IdcRefreshResponse, RefreshRequest, RefreshResponse,
 };
 use crate::kiro::model::usage_limits::UsageLimitsResponse;
-use crate::model::config::Config;
+use crate::model::config::{Config, KeywordReplacement};
 
 /// 检查 Token 是否在指定时间内过期
 pub(crate) fn is_token_expiring_within(
@@ -479,6 +479,15 @@ pub struct CredentialEntrySnapshot {
     /// 代理 URL（用于前端展示）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<String>,
+    /// 代理认证用户名
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_username: Option<String>,
+    /// 代理认证密码
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_password: Option<String>,
+    /// 凭据级 Machine ID（64 位十六进制字符串）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
     /// Token 刷新连续失败次数
     pub refresh_failure_count: u32,
     /// 禁用原因
@@ -487,6 +496,12 @@ pub struct CredentialEntrySnapshot {
     /// 端点名称（未显式配置时返回 None，由 Admin 层回退到默认值）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+    /// 订阅等级（如 KIRO PRO、Free 等）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription_title: Option<String>,
+    /// 用量百分比（0-100）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_percentage: Option<f64>,
 }
 
 /// 凭据管理器状态快照
@@ -526,6 +541,10 @@ pub struct MultiTokenManager {
     last_stats_save_at: Mutex<Option<Instant>>,
     /// 统计数据是否有未落盘更新
     stats_dirty: AtomicBool,
+    /// 关键词替换缓存（与 config.json 同步）
+    keyword_replacements: Mutex<Vec<KeywordReplacement>>,
+    /// 关键词替换功能总开关缓存
+    keyword_replacement_enabled: Mutex<bool>,
 }
 
 /// 每个凭据最大 API 调用失败次数
@@ -644,6 +663,8 @@ impl MultiTokenManager {
             .unwrap_or(0);
 
         let load_balancing_mode = config.load_balancing_mode.clone();
+        let kw_replacements = config.keyword_replacements.clone();
+        let kw_enabled = config.keyword_replacement_enabled;
         let manager = Self {
             config,
             proxy,
@@ -655,6 +676,8 @@ impl MultiTokenManager {
             load_balancing_mode: Mutex::new(load_balancing_mode),
             last_stats_save_at: Mutex::new(None),
             stats_dirty: AtomicBool::new(false),
+            keyword_replacements: Mutex::new(kw_replacements),
+            keyword_replacement_enabled: Mutex::new(kw_enabled),
         };
 
         // 如果有新分配的 ID 或新生成的 machineId，立即持久化到配置文件
@@ -675,6 +698,67 @@ impl MultiTokenManager {
     /// 获取配置的引用
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// 对请求体应用关键词替换（使用内存缓存，与 config.json 同步）
+    ///
+    /// 仅在关键词替换功能开启时执行替换，支持普通字符串和正则两种模式。
+    pub fn apply_keyword_replacements(&self, body: &str) -> String {
+        let enabled = *self.keyword_replacement_enabled.lock();
+        if !enabled {
+            return body.to_string();
+        }
+
+        let replacements = self.keyword_replacements.lock();
+        if replacements.is_empty() {
+            return body.to_string();
+        }
+
+        let mut result = body.to_string();
+        for r in replacements.iter() {
+            if r.is_regex {
+                match regex::Regex::new(&r.pattern) {
+                    Ok(re) => {
+                        result = re.replace_all(&result, &r.replacement).to_string();
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "关键词替换正则编译失败 (id={}, pattern={}): {}",
+                            r.id,
+                            r.pattern,
+                            e
+                        );
+                    }
+                }
+            } else {
+                result = result.replace(&r.pattern, &r.replacement);
+            }
+        }
+
+        if result != body {
+            tracing::info!(
+                "关键词替换已应用 ({} 条规则，body 长度 {} -> {})",
+                replacements.len(),
+                body.len(),
+                result.len()
+            );
+        }
+        result
+    }
+
+    /// 同步关键词配置缓存（Admin API 修改 config.json 后调用）
+    pub fn sync_keyword_config(
+        &self,
+        replacements: Vec<KeywordReplacement>,
+        enabled: bool,
+    ) {
+        tracing::info!(
+            "同步关键词配置缓存: enabled={}, {} 条规则",
+            enabled,
+            replacements.len()
+        );
+        *self.keyword_replacements.lock() = replacements;
+        *self.keyword_replacement_enabled.lock() = enabled;
     }
 
     /// 获取凭据总数
@@ -1444,6 +1528,9 @@ impl MultiTokenManager {
                     last_used_at: e.last_used_at.clone(),
                     has_proxy: e.credentials.proxy_url.is_some(),
                     proxy_url: e.credentials.proxy_url.clone(),
+                    proxy_username: e.credentials.proxy_username.clone(),
+                    proxy_password: e.credentials.proxy_password.clone(),
+                    machine_id: e.credentials.machine_id.clone(),
                     refresh_failure_count: e.refresh_failure_count,
                     disabled_reason: e.disabled_reason.map(|r| match r {
                         DisabledReason::Manual => "Manual",
@@ -1454,6 +1541,8 @@ impl MultiTokenManager {
                         DisabledReason::InvalidConfig => "InvalidConfig",
                     }.to_string()),
                     endpoint: e.credentials.endpoint.clone(),
+                    subscription_title: e.credentials.subscription_title.clone(),
+                    usage_percentage: None,
                 })
                 .collect(),
             current_id,
@@ -1501,6 +1590,61 @@ impl MultiTokenManager {
         // 立即按新优先级重新选择当前凭据（无论持久化是否成功）
         self.select_highest_priority();
         // 持久化更改
+        self.persist_credentials()?;
+        Ok(())
+    }
+
+    /// 设置凭据邮箱（Admin API）
+    pub fn set_email(&self, id: u64, email: String) -> anyhow::Result<()> {
+        {
+            let mut entries = self.entries.lock();
+            let entry = entries
+                .iter_mut()
+                .find(|e| e.id == id)
+                .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
+            entry.credentials.email = Some(email);
+        }
+        // 持久化更改
+        self.persist_credentials()?;
+        Ok(())
+    }
+
+    /// 设置凭据代理配置（Admin API）
+    ///
+    /// 修改后立即生效：下次 API 请求时将使用新的代理配置。
+    pub fn set_proxy(
+        &self,
+        id: u64,
+        proxy_url: Option<String>,
+        proxy_username: Option<String>,
+        proxy_password: Option<String>,
+    ) -> anyhow::Result<()> {
+        {
+            let mut entries = self.entries.lock();
+            let entry = entries
+                .iter_mut()
+                .find(|e| e.id == id)
+                .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
+            entry.credentials.proxy_url = proxy_url;
+            entry.credentials.proxy_username = proxy_username;
+            entry.credentials.proxy_password = proxy_password;
+        }
+        self.persist_credentials()?;
+        Ok(())
+    }
+
+    /// 设置凭据 Machine ID（Admin API）
+    ///
+    /// 修改后立即生效：下次 API 请求时将使用新的 machineId。
+    pub fn set_machine_id(&self, id: u64, machine_id: Option<String>) -> anyhow::Result<()> {
+        {
+            let mut entries = self.entries.lock();
+            let entry = entries
+                .iter_mut()
+                .find(|e| e.id == id)
+                .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
+            entry.credentials.machine_id = machine_id;
+        }
         self.persist_credentials()?;
         Ok(())
     }
@@ -1604,33 +1748,13 @@ impl MultiTokenManager {
         let effective_proxy = credentials.effective_proxy(self.proxy.as_ref());
         let usage_limits = get_usage_limits(&credentials, &self.config, &token, effective_proxy.as_ref()).await?;
 
-        // 更新订阅等级到凭据（仅在发生变化时持久化）
+        // 更新订阅等级到凭据内存
         if let Some(subscription_title) = usage_limits.subscription_title() {
-            let changed = {
-                let mut entries = self.entries.lock();
-                if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
-                    let old_title = entry.credentials.subscription_title.clone();
-                    if old_title.as_deref() != Some(subscription_title) {
-                        entry.credentials.subscription_title =
-                            Some(subscription_title.to_string());
-                        tracing::info!(
-                            "凭据 #{} 订阅等级已更新: {:?} -> {}",
-                            id,
-                            old_title,
-                            subscription_title
-                        );
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            };
-
-            if changed {
-                if let Err(e) = self.persist_credentials() {
-                    tracing::warn!("订阅等级更新后持久化失败（不影响本次请求）: {}", e);
+            let mut entries = self.entries.lock();
+            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                let new_title = Some(subscription_title.to_string());
+                if entry.credentials.subscription_title != new_title {
+                    entry.credentials.subscription_title = new_title;
                 }
             }
         }

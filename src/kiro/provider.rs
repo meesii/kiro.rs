@@ -143,6 +143,7 @@ impl KiroProvider {
             };
 
             let config = self.token_manager.config();
+            let replaced_body = self.token_manager.apply_keyword_replacements(request_body);
             let machine_id = machine_id::generate_from_credentials(&ctx.credentials, config);
 
             let endpoint = match self.endpoint_for(&ctx.credentials) {
@@ -163,7 +164,7 @@ impl KiroProvider {
             };
 
             let url = endpoint.mcp_url(&rctx);
-            let body = endpoint.transform_mcp_body(request_body, &rctx);
+            let body = endpoint.transform_mcp_body(&replaced_body, &rctx);
 
             let base = self
                 .client_for(&ctx.credentials)?
@@ -301,6 +302,7 @@ impl KiroProvider {
             };
 
             let config = self.token_manager.config();
+            let replaced_body = self.token_manager.apply_keyword_replacements(request_body);
             let machine_id = machine_id::generate_from_credentials(&ctx.credentials, config);
 
             let endpoint = match self.endpoint_for(&ctx.credentials) {
@@ -320,7 +322,7 @@ impl KiroProvider {
             };
 
             let url = endpoint.api_url(&rctx);
-            let body = endpoint.transform_api_body(request_body, &rctx);
+            let body = endpoint.transform_api_body(&replaced_body, &rctx);
 
             let base = self
                 .client_for(&ctx.credentials)?

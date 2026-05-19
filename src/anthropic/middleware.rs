@@ -11,6 +11,7 @@ use axum::{
 };
 
 use crate::common::auth;
+use crate::db::ConversationDb;
 use crate::kiro::provider::KiroProvider;
 
 use super::types::ErrorResponse;
@@ -25,6 +26,8 @@ pub struct AppState {
     pub kiro_provider: Option<Arc<KiroProvider>>,
     /// 是否开启非流式响应的 thinking 块提取
     pub extract_thinking: bool,
+    /// 对话数据库（可选）
+    pub db: Option<ConversationDb>,
 }
 
 impl AppState {
@@ -34,6 +37,7 @@ impl AppState {
             api_key: api_key.into(),
             kiro_provider: None,
             extract_thinking,
+            db: None,
         }
     }
 

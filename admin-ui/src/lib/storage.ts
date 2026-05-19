@@ -1,7 +1,16 @@
-const API_KEY_STORAGE_KEY = 'adminApiKey'
-
+/**
+ * API Key 本地存储
+ */
 export const storage = {
-  getApiKey: () => localStorage.getItem(API_KEY_STORAGE_KEY),
-  setApiKey: (key: string) => localStorage.setItem(API_KEY_STORAGE_KEY, key),
-  removeApiKey: () => localStorage.removeItem(API_KEY_STORAGE_KEY),
+  get_api_key(): string | null {
+    return localStorage.getItem("adminApiKey")
+  },
+
+  set_api_key(key: string) {
+    localStorage.setItem("adminApiKey", key)
+  },
+
+  remove_api_key() {
+    localStorage.removeItem("adminApiKey")
+  },
 }

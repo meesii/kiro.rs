@@ -13,6 +13,7 @@ use axum::{
 use super::service::AdminService;
 use super::types::AdminErrorResponse;
 use crate::common::auth;
+use crate::db::ConversationDb;
 
 /// Admin API 共享状态
 #[derive(Clone)]
@@ -21,6 +22,8 @@ pub struct AdminState {
     pub admin_api_key: String,
     /// Admin 服务
     pub service: Arc<AdminService>,
+    /// 对话数据库（可选）
+    pub db: Option<ConversationDb>,
 }
 
 impl AdminState {
@@ -28,7 +31,13 @@ impl AdminState {
         Self {
             admin_api_key: admin_api_key.into(),
             service: Arc::new(service),
+            db: None,
         }
+    }
+
+    pub fn with_db(mut self, db: Option<ConversationDb>) -> Self {
+        self.db = db;
+        self
     }
 }
 

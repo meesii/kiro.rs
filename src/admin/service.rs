@@ -13,9 +13,14 @@ use crate::kiro::token_manager::MultiTokenManager;
 
 use super::error::AdminServiceError;
 use super::types::{
-    AddCredentialRequest, AddCredentialResponse, BalanceResponse, CredentialStatusItem,
-    CredentialsStatusResponse, LoadBalancingModeResponse, SetLoadBalancingModeRequest,
+    AddCredentialRequest, AddCredentialResponse, AddKeywordReplacementRequest,
+    AdminConfigResponse, BalanceResponse, CredentialStatusItem,
+    CredentialsStatusResponse, KeywordReplacementItem,
+    KeywordReplacementsResponse, UpdateAdminConfigRequest,
+    UpdateKeywordReplacementRequest,
 };
+
+use crate::model::config::Config;
 
 /// 余额缓存过期时间（秒），5 分钟
 const BALANCE_CACHE_TTL_SECS: i64 = 300;
@@ -35,6 +40,8 @@ struct CachedBalance {
 pub struct AdminService {
     token_manager: Arc<MultiTokenManager>,
     balance_cache: Mutex<HashMap<u64, CachedBalance>>,
+    /// 余额刷新错误记录，用于前端展示（不持久化）
+    balance_error_map: Mutex<HashMap<u64, String>>,
     cache_path: Option<PathBuf>,
     /// 已注册的端点名称集合（用于 add_credential 校验）
     known_endpoints: HashSet<String>,
@@ -54,6 +61,7 @@ impl AdminService {
         Self {
             token_manager,
             balance_cache: Mutex::new(balance_cache),
+            balance_error_map: Mutex::new(HashMap::new()),
             cache_path,
             known_endpoints: known_endpoints.into_iter().collect(),
         }
@@ -67,28 +75,70 @@ impl AdminService {
         let mut credentials: Vec<CredentialStatusItem> = snapshot
             .entries
             .into_iter()
-            .map(|entry| CredentialStatusItem {
-                id: entry.id,
-                priority: entry.priority,
-                disabled: entry.disabled,
-                failure_count: entry.failure_count,
-                is_current: entry.id == snapshot.current_id,
-                expires_at: entry.expires_at,
-                auth_method: entry.auth_method,
-                has_profile_arn: entry.has_profile_arn,
-                refresh_token_hash: entry.refresh_token_hash,
-                api_key_hash: entry.api_key_hash,
-                masked_api_key: entry.masked_api_key,
-                email: entry.email,
-                success_count: entry.success_count,
-                last_used_at: entry.last_used_at.clone(),
-                has_proxy: entry.has_proxy,
-                proxy_url: entry.proxy_url,
-                refresh_failure_count: entry.refresh_failure_count,
-                disabled_reason: entry.disabled_reason,
-                endpoint: entry.endpoint.unwrap_or_else(|| default_endpoint.clone()),
+            .map(|entry| {
+                let id = entry.id;
+                CredentialStatusItem {
+                    id,
+                    priority: entry.priority,
+                    disabled: entry.disabled,
+                    failure_count: entry.failure_count,
+                    is_current: entry.id == snapshot.current_id,
+                    expires_at: entry.expires_at,
+                    auth_method: entry.auth_method,
+                    has_profile_arn: entry.has_profile_arn,
+                    refresh_token_hash: entry.refresh_token_hash,
+                    api_key_hash: entry.api_key_hash,
+                    masked_api_key: entry.masked_api_key,
+                    email: entry.email,
+                    success_count: entry.success_count,
+                    last_used_at: entry.last_used_at.clone(),
+                    has_proxy: entry.has_proxy,
+                    proxy_url: entry.proxy_url,
+                    proxy_username: entry.proxy_username,
+                    proxy_password: entry.proxy_password,
+                    machine_id: entry.machine_id,
+                    refresh_failure_count: entry.refresh_failure_count,
+                    disabled_reason: entry.disabled_reason,
+                    endpoint: entry.endpoint.unwrap_or_else(|| default_endpoint.clone()),
+                    subscription_title: entry.subscription_title,
+                    usage_percentage: entry.usage_percentage,
+                    current_usage: None,
+                    usage_limit: None,
+                    balance_error: None,
+                }
             })
             .collect();
+
+        // 从 balance_cache 补充 subscription_title 和 usage_percentage
+        {
+            let cache = self.balance_cache.lock();
+            for item in &mut credentials {
+                if let Some(cached) = cache.get(&item.id) {
+                    if item.subscription_title.is_none() {
+                        item.subscription_title = cached.data.subscription_title.clone();
+                    }
+                    if item.usage_percentage.is_none() {
+                        item.usage_percentage = Some(cached.data.usage_percentage);
+                    }
+                    if item.current_usage.is_none() {
+                        item.current_usage = Some(cached.data.current_usage);
+                    }
+                    if item.usage_limit.is_none() {
+                        item.usage_limit = Some(cached.data.usage_limit);
+                    }
+                }
+            }
+        }
+
+        // 附加上次余额刷新失败的错误信息
+        {
+            let errors = self.balance_error_map.lock();
+            for item in &mut credentials {
+                if let Some(err) = errors.get(&item.id) {
+                    item.balance_error = Some(err.clone());
+                }
+            }
+        }
 
         // 按优先级排序（数字越小优先级越高）
         credentials.sort_by_key(|c| c.priority);
@@ -125,6 +175,33 @@ impl AdminService {
             .map_err(|e| self.classify_error(e, id))
     }
 
+    /// 设置凭据邮箱
+    pub fn set_email(&self, id: u64, email: String) -> Result<(), AdminServiceError> {
+        self.token_manager
+            .set_email(id, email)
+            .map_err(|e| self.classify_error(e, id))
+    }
+
+    /// 设置凭据代理配置
+    pub fn set_proxy(
+        &self,
+        id: u64,
+        proxy_url: Option<String>,
+        proxy_username: Option<String>,
+        proxy_password: Option<String>,
+    ) -> Result<(), AdminServiceError> {
+        self.token_manager
+            .set_proxy(id, proxy_url, proxy_username, proxy_password)
+            .map_err(|e| self.classify_error(e, id))
+    }
+
+    /// 设置凭据 Machine ID
+    pub fn set_machine_id(&self, id: u64, machine_id: Option<String>) -> Result<(), AdminServiceError> {
+        self.token_manager
+            .set_machine_id(id, machine_id)
+            .map_err(|e| self.classify_error(e, id))
+    }
+
     /// 重置失败计数并重新启用
     pub fn reset_and_enable(&self, id: u64) -> Result<(), AdminServiceError> {
         self.token_manager
@@ -132,37 +209,48 @@ impl AdminService {
             .map_err(|e| self.classify_error(e, id))
     }
 
-    /// 获取凭据余额（带缓存）
+    /// 获取凭据余额（上游优先，失败时兜底返回缓存 + stale 标识）
     pub async fn get_balance(&self, id: u64) -> Result<BalanceResponse, AdminServiceError> {
-        // 先查缓存
-        {
-            let cache = self.balance_cache.lock();
-            if let Some(cached) = cache.get(&id) {
-                let now = Utc::now().timestamp() as f64;
-                if (now - cached.cached_at) < BALANCE_CACHE_TTL_SECS as f64 {
-                    tracing::debug!("凭据 #{} 余额命中缓存", id);
-                    return Ok(cached.data.clone());
+        // 始终先尝试从上游获取最新数据
+        match self.fetch_balance(id).await {
+            Ok(mut balance) => {
+                balance.stale = false;
+                // 更新缓存
+                {
+                    let mut cache = self.balance_cache.lock();
+                    cache.insert(
+                        id,
+                        CachedBalance {
+                            cached_at: Utc::now().timestamp() as f64,
+                            data: balance.clone(),
+                        },
+                    );
+                }
+                self.save_balance_cache();
+                // 成功后清除余额错误记录
+                self.balance_error_map.lock().remove(&id);
+                Ok(balance)
+            }
+            Err(upstream_err) => {
+                // 上游失败，尝试兜底返回缓存（不限 TTL）
+                let cached = {
+                    let cache = self.balance_cache.lock();
+                    cache.get(&id).cloned()
+                };
+                if let Some(cached) = cached {
+                    let mut balance = cached.data;
+                    balance.stale = true;
+                    tracing::warn!(
+                        "凭据 #{} 上游获取失败 ({}), 返回缓存数据",
+                        id,
+                        upstream_err
+                    );
+                    Ok(balance)
+                } else {
+                    Err(upstream_err)
                 }
             }
         }
-
-        // 缓存未命中或已过期，从上游获取
-        let balance = self.fetch_balance(id).await?;
-
-        // 更新缓存
-        {
-            let mut cache = self.balance_cache.lock();
-            cache.insert(
-                id,
-                CachedBalance {
-                    cached_at: Utc::now().timestamp() as f64,
-                    data: balance.clone(),
-                },
-            );
-        }
-        self.save_balance_cache();
-
-        Ok(balance)
     }
 
     /// 从上游获取余额（无缓存）
@@ -190,6 +278,7 @@ impl AdminService {
             remaining,
             usage_percentage,
             next_reset_at: usage.next_date_reset,
+            stale: false,
         })
     }
 
@@ -244,9 +333,42 @@ impl AdminService {
             .await
             .map_err(|e| self.classify_add_error(e))?;
 
-        // 主动获取订阅等级，避免首次请求时 Free 账号绕过 Opus 模型过滤
-        if let Err(e) = self.token_manager.get_usage_limits_for(credential_id).await {
-            tracing::warn!("添加凭据后获取订阅等级失败（不影响凭据添加）: {}", e);
+        // 尝试获取余额信息并缓存，使凭据列表立即可见用量数据
+        match self.token_manager.get_usage_limits_for(credential_id).await {
+            Ok(usage) => {
+                let current_usage = usage.current_usage();
+                let usage_limit = usage.usage_limit();
+                let remaining = (usage_limit - current_usage).max(0.0);
+                let usage_percentage = if usage_limit > 0.0 {
+                    (current_usage / usage_limit * 100.0).min(100.0)
+                } else {
+                    0.0
+                };
+                let balance = BalanceResponse {
+                    id: credential_id,
+                    subscription_title: usage.subscription_title().map(|s| s.to_string()),
+                    current_usage,
+                    usage_limit,
+                    remaining,
+                    usage_percentage,
+                    next_reset_at: usage.next_date_reset,
+                    stale: false,
+                };
+                {
+                    let mut cache = self.balance_cache.lock();
+                    cache.insert(
+                        credential_id,
+                        CachedBalance {
+                            cached_at: Utc::now().timestamp() as f64,
+                            data: balance,
+                        },
+                    );
+                }
+                self.save_balance_cache();
+            }
+            Err(e) => {
+                tracing::warn!("添加凭据后获取余额信息失败（不影响凭据添加）: {}", e);
+            }
         }
 
         Ok(AddCredentialResponse {
@@ -273,30 +395,199 @@ impl AdminService {
         Ok(())
     }
 
-    /// 获取负载均衡模式
-    pub fn get_load_balancing_mode(&self) -> LoadBalancingModeResponse {
-        LoadBalancingModeResponse {
-            mode: self.token_manager.get_load_balancing_mode(),
-        }
+    // ============ 关键词替换 ============
+
+    /// 获取关键词替换列表（从磁盘读取最新配置）
+    pub fn get_keyword_replacements(&self) -> KeywordReplacementsResponse {
+        let config_path = match self.token_manager.config().config_path() {
+            Some(p) => p.to_path_buf(),
+            None => {
+                return KeywordReplacementsResponse {
+                    replacements: vec![],
+                };
+            }
+        };
+
+        let replacements = Config::load(&config_path)
+            .map(|config| {
+                config
+                    .keyword_replacements
+                    .iter()
+                    .map(|kw| KeywordReplacementItem {
+                        id: kw.id.clone(),
+                        pattern: kw.pattern.clone(),
+                        replacement: kw.replacement.clone(),
+                        is_regex: kw.is_regex,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        KeywordReplacementsResponse { replacements }
     }
 
-    /// 设置负载均衡模式
-    pub fn set_load_balancing_mode(
+    /// 读取并修改 config.json 的通用 helper
+    fn modify_config<F>(&self, action: F) -> Result<(), AdminServiceError>
+    where
+        F: FnOnce(&mut Config) -> Result<(), AdminServiceError>,
+    {
+        let config_path = self
+            .token_manager
+            .config()
+            .config_path()
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| {
+                AdminServiceError::InternalError("配置文件路径未知".to_string())
+            })?;
+
+        let mut config = Config::load(&config_path).map_err(|e| {
+            AdminServiceError::InternalError(format!("加载配置失败: {}", e))
+        })?;
+
+        action(&mut config)?;
+
+        config.save().map_err(|e| {
+            AdminServiceError::InternalError(format!("保存配置失败: {}", e))
+        })?;
+
+        // 同步关键词配置缓存到 MultiTokenManager 内存
+        self.token_manager.sync_keyword_config(
+            config.keyword_replacements.clone(),
+            config.keyword_replacement_enabled,
+        );
+
+        Ok(())
+    }
+
+    /// 新增关键词替换
+    pub fn add_keyword_replacement(
         &self,
-        req: SetLoadBalancingModeRequest,
-    ) -> Result<LoadBalancingModeResponse, AdminServiceError> {
-        // 验证模式值
-        if req.mode != "priority" && req.mode != "balanced" {
-            return Err(AdminServiceError::InvalidCredential(
-                "mode 必须是 'priority' 或 'balanced'".to_string(),
-            ));
+        req: AddKeywordReplacementRequest,
+    ) -> Result<KeywordReplacementsResponse, AdminServiceError> {
+        self.modify_config(|config| {
+            if config.keyword_replacements.iter().any(|kw| kw.id == req.id) {
+                return Err(AdminServiceError::InvalidCredential(format!(
+                    "关键词 ID 已存在: {}",
+                    req.id
+                )));
+            }
+            config.keyword_replacements.push(crate::model::config::KeywordReplacement {
+                id: req.id,
+                pattern: req.pattern,
+                replacement: req.replacement,
+                is_regex: req.is_regex,
+            });
+            Ok(())
+        })?;
+
+        Ok(self.get_keyword_replacements())
+    }
+
+    /// 更新关键词替换
+    pub fn update_keyword_replacement(
+        &self,
+        id: String,
+        req: UpdateKeywordReplacementRequest,
+    ) -> Result<KeywordReplacementsResponse, AdminServiceError> {
+        self.modify_config(|config| {
+            let kw = config
+                .keyword_replacements
+                .iter_mut()
+                .find(|kw| kw.id == id)
+                .ok_or_else(|| {
+                    AdminServiceError::NotFound { id: 0 }
+                })?;
+            kw.pattern = req.pattern;
+            kw.replacement = req.replacement;
+            kw.is_regex = req.is_regex;
+            Ok(())
+        })?;
+
+        Ok(self.get_keyword_replacements())
+    }
+
+    /// 删除关键词替换
+    pub fn delete_keyword_replacement(
+        &self,
+        id: String,
+    ) -> Result<KeywordReplacementsResponse, AdminServiceError> {
+        self.modify_config(|config| {
+            let pos = config
+                .keyword_replacements
+                .iter()
+                .position(|kw| kw.id == id)
+                .ok_or_else(|| {
+                    AdminServiceError::NotFound { id: 0 }
+                })?;
+            config.keyword_replacements.remove(pos);
+            Ok(())
+        })?;
+
+        Ok(self.get_keyword_replacements())
+    }
+
+    // ============ 统一 Admin 配置 ============
+
+    /// 获取 Admin 可编辑的配置（从磁盘读取最新配置）
+    pub fn get_admin_config(&self) -> AdminConfigResponse {
+        let config_path = match self.token_manager.config().config_path() {
+            Some(p) => p.to_path_buf(),
+            None => {
+                return AdminConfigResponse {
+                    load_balancing_mode: "priority".to_string(),
+                    keyword_replacement_enabled: false,
+                    db_path: None,
+                };
+            }
+        };
+
+        Config::load(&config_path)
+            .map(|c| AdminConfigResponse {
+                load_balancing_mode: c.load_balancing_mode,
+                keyword_replacement_enabled: c.keyword_replacement_enabled,
+                db_path: c.db_path,
+            })
+            .unwrap_or(AdminConfigResponse {
+                load_balancing_mode: "priority".to_string(),
+                keyword_replacement_enabled: false,
+                db_path: None,
+            })
+    }
+
+    /// 更新 Admin 配置（部分字段更新）
+    pub fn update_admin_config(
+        &self,
+        req: UpdateAdminConfigRequest,
+    ) -> Result<AdminConfigResponse, AdminServiceError> {
+        self.modify_config(|config| {
+            if let Some(ref mode) = req.load_balancing_mode {
+                if mode != "priority" && mode != "balanced" {
+                    return Err(AdminServiceError::InvalidCredential(format!(
+                        "loadBalancingMode 必须是 'priority' 或 'balanced'，当前值: {}",
+                        mode
+                    )));
+                }
+                config.load_balancing_mode = mode.clone();
+            }
+            if let Some(enabled) = req.keyword_replacement_enabled {
+                config.keyword_replacement_enabled = enabled;
+            }
+            if let Some(ref path) = req.db_path {
+                config.db_path = if path.trim().is_empty() {
+                    None
+                } else {
+                    Some(path.clone())
+                };
+            }
+            Ok(())
+        })?;
+
+        // 负载均衡模式变更时同步更新 token_manager 内存状态
+        if let Some(ref mode) = req.load_balancing_mode {
+            let _ = self.token_manager.set_load_balancing_mode(mode.clone());
         }
 
-        self.token_manager
-            .set_load_balancing_mode(req.mode.clone())
-            .map_err(|e| AdminServiceError::InternalError(e.to_string()))?;
-
-        Ok(LoadBalancingModeResponse { mode: req.mode })
+        Ok(self.get_admin_config())
     }
 
     /// 强制刷新指定凭据的 Token
@@ -305,6 +596,69 @@ impl AdminService {
             .force_refresh_token_for(id)
             .await
             .map_err(|e| self.classify_balance_error(e, id))
+    }
+
+    /// 强制刷新指定凭据的余额（绕过缓存，失败不兜底）
+    pub async fn force_refresh_balance(&self, id: u64) -> Result<BalanceResponse, AdminServiceError> {
+        let mut balance = self.fetch_balance(id).await?;
+        balance.stale = false;
+
+        // 更新缓存
+        {
+            let mut cache = self.balance_cache.lock();
+            cache.insert(
+                id,
+                CachedBalance {
+                    cached_at: Utc::now().timestamp() as f64,
+                    data: balance.clone(),
+                },
+            );
+        }
+        self.save_balance_cache();
+
+        // 成功后清除余额错误记录
+        self.balance_error_map.lock().remove(&id);
+
+        Ok(balance)
+    }
+
+    /// 启动时刷新所有凭据的余额（含已禁用的，以便启用后立即可见）
+    pub async fn refresh_all_balances(&self) {
+        let snapshot = self.token_manager.snapshot();
+        let all_ids: Vec<u64> = snapshot
+            .entries
+            .iter()
+            .map(|e| e.id)
+            .collect();
+
+        if all_ids.is_empty() {
+            tracing::info!("没有凭据，跳过余额刷新");
+            return;
+        }
+
+        tracing::info!("开始刷新 {} 个凭据的余额...", all_ids.len());
+        for id in all_ids {
+            match self.get_balance(id).await {
+                Ok(balance) => {
+                    tracing::info!(
+                        "凭据 #{} 余额刷新成功: {} ({:.1}%)",
+                        id,
+                        balance.subscription_title.as_deref().unwrap_or("未知"),
+                        balance.usage_percentage
+                    );
+                    // 成功后清除之前的错误记录
+                    self.balance_error_map.lock().remove(&id);
+                }
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    tracing::warn!("凭据 #{} 余额刷新失败: {}", id, err_msg);
+                    // 存储简化后的错误信息供前端展示
+                    let short_msg = simplify_balance_error(&err_msg);
+                    self.balance_error_map.lock().insert(id, short_msg);
+                }
+            }
+        }
+        tracing::info!("余额刷新完成");
     }
 
     // ============ 余额缓存持久化 ============
@@ -413,7 +767,31 @@ impl AdminService {
             AdminServiceError::InternalError(msg)
         }
     }
+}
 
+// ============ 余额错误简化 ============
+
+/// 将完整的余额错误信息简化为前端可展示的短消息
+fn simplify_balance_error(msg: &str) -> String {
+    if msg.contains("权限不足") || msg.contains("invalid") || msg.contains("403") {
+        "Token 或 API Key 已失效".to_string()
+    } else if msg.contains("限流") || msg.contains("429") || msg.contains("Too Many") {
+        "请求过于频繁，请稍后重试".to_string()
+    } else if msg.contains("timeout") || msg.contains("超时") {
+        "请求超时".to_string()
+    } else if msg.contains("连接") || msg.contains("connect") || msg.contains("网络") {
+        "网络连接失败".to_string()
+    } else if msg.contains("API Key 凭据不支持刷新") {
+        "API Key 不支持刷新操作".to_string()
+    } else if msg.len() > 80 {
+        // 截断过长消息
+        format!("{}…", &msg[..80])
+    } else {
+        msg.to_string()
+    }
+}
+
+impl AdminService {
     /// 分类添加凭据错误
     fn classify_add_error(&self, e: anyhow::Error) -> AdminServiceError {
         let msg = e.to_string();

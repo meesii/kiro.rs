@@ -3,6 +3,7 @@
 use std::convert::Infallible;
 
 use anyhow::Error;
+use crate::db::{ConversationDb, ConversationRecord};
 use crate::kiro::model::events::Event;
 use crate::kiro::model::requests::kiro::KiroRequest;
 use crate::kiro::parser::decoder::EventStreamDecoder;
@@ -17,7 +18,7 @@ use axum::{
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
 use serde_json::json;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::interval;
 use uuid::Uuid;
 
@@ -197,6 +198,8 @@ pub async fn post_messages(
     State(state): State<AppState>,
     JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
+    let start_time = Instant::now();
+
     tracing::info!(
         model = %payload.model,
         max_tokens = %payload.max_tokens,
@@ -204,6 +207,13 @@ pub async fn post_messages(
         message_count = %payload.messages.len(),
         "Received POST /v1/messages request"
     );
+
+    // 保存请求数据用于数据库记录
+    let db_system_prompt = payload.system.as_ref().and_then(|s| serde_json::to_string(s).ok());
+    let db_messages = serde_json::to_string(&payload.messages).unwrap_or_default();
+    let db_model = payload.model.clone();
+    let db = state.db.clone();
+
     // 检查 KiroProvider 是否可用
     let provider = match &state.kiro_provider {
         Some(p) => p.clone(),
@@ -308,12 +318,21 @@ pub async fn post_messages(
             input_tokens,
             thinking_enabled,
             tool_name_map,
+            db,
+            db_model,
+            "v1".to_string(),
+            db_system_prompt,
+            db_messages,
+            start_time,
         )
         .await
     } else {
         // 非流式响应：仅在配置开启时提取 thinking 块
         let extract_thinking = state.extract_thinking && thinking_enabled;
-        handle_non_stream_request(provider, &request_body, &payload.model, input_tokens, extract_thinking, tool_name_map).await
+        handle_non_stream_request(
+            provider, &request_body, &payload.model, input_tokens, extract_thinking, tool_name_map,
+            db, db_model, "v1".to_string(), db_system_prompt, db_messages, start_time,
+        ).await
     }
 }
 
@@ -325,6 +344,12 @@ async fn handle_stream_request(
     input_tokens: i32,
     thinking_enabled: bool,
     tool_name_map: std::collections::HashMap<String, String>,
+    db: Option<ConversationDb>,
+    db_model: String,
+    db_endpoint: String,
+    db_system_prompt: Option<String>,
+    db_messages: String,
+    start_time: Instant,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let response = match provider.call_api_stream(request_body).await {
@@ -339,7 +364,7 @@ async fn handle_stream_request(
     let initial_events = ctx.generate_initial_events();
 
     // 创建 SSE 流
-    let stream = create_sse_stream(response, ctx, initial_events);
+    let stream = create_sse_stream(response, ctx, initial_events, db, db_model, db_endpoint, db_system_prompt, db_messages, start_time);
 
     // 返回 SSE 响应
     Response::builder()
@@ -364,6 +389,12 @@ fn create_sse_stream(
     response: reqwest::Response,
     ctx: StreamContext,
     initial_events: Vec<SseEvent>,
+    db: Option<ConversationDb>,
+    db_model: String,
+    db_endpoint: String,
+    db_system_prompt: Option<String>,
+    db_messages: String,
+    start_time: Instant,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     // 先发送初始事件
     let initial_stream = stream::iter(
@@ -376,8 +407,10 @@ fn create_sse_stream(
     let body_stream = response.bytes_stream();
 
     let processing_stream = stream::unfold(
-        (body_stream, ctx, EventStreamDecoder::new(), false, interval(Duration::from_secs(PING_INTERVAL_SECS))),
-        |(mut body_stream, mut ctx, mut decoder, finished, mut ping_interval)| async move {
+        (body_stream, ctx, EventStreamDecoder::new(), false, interval(Duration::from_secs(PING_INTERVAL_SECS)),
+         db, db_model, db_endpoint, db_system_prompt, db_messages, start_time),
+        |(mut body_stream, mut ctx, mut decoder, finished, mut ping_interval,
+          db, db_model, db_endpoint, db_system_prompt, db_messages, start_time)| async move {
             if finished {
                 return None;
             }
@@ -414,7 +447,7 @@ fn create_sse_stream(
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
 
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval)))
+                            Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval, db, db_model, db_endpoint, db_system_prompt, db_messages, start_time)))
                         }
                         Some(Err(e)) => {
                             tracing::error!("读取响应流失败: {}", e);
@@ -424,7 +457,14 @@ fn create_sse_stream(
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)))
+
+                            // 保存对话到数据库
+                            spawn_save_stream_conversation(
+                                &db, &db_model, &db_endpoint, &db_system_prompt, &db_messages,
+                                &ctx, start_time,
+                            );
+
+                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, db, db_model, db_endpoint, db_system_prompt, db_messages, start_time)))
                         }
                         None => {
                             // 流结束，发送最终事件
@@ -433,7 +473,14 @@ fn create_sse_stream(
                                 .into_iter()
                                 .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                 .collect();
-                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)))
+
+                            // 保存对话到数据库
+                            spawn_save_stream_conversation(
+                                &db, &db_model, &db_endpoint, &db_system_prompt, &db_messages,
+                                &ctx, start_time,
+                            );
+
+                            Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, db, db_model, db_endpoint, db_system_prompt, db_messages, start_time)))
                         }
                     }
                 }
@@ -441,7 +488,7 @@ fn create_sse_stream(
                 _ = ping_interval.tick() => {
                     tracing::trace!("发送 ping 保活事件");
                     let bytes: Vec<Result<Bytes, Infallible>> = vec![Ok(create_ping_sse())];
-                    Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval)))
+                    Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval, db, db_model, db_endpoint, db_system_prompt, db_messages, start_time)))
                 }
             }
         },
@@ -453,6 +500,37 @@ fn create_sse_stream(
 
 use super::converter::get_context_window_size;
 
+/// 从流式响应的 StreamContext 中提取数据并异步保存到数据库
+fn spawn_save_stream_conversation(
+    db: &Option<ConversationDb>,
+    model: &str,
+    endpoint: &str,
+    system_prompt: &Option<String>,
+    messages: &str,
+    ctx: &StreamContext,
+    start_time: Instant,
+) {
+    if let Some(db) = db {
+        let duration_ms = start_time.elapsed().as_millis() as i64;
+        let final_input_tokens = ctx.context_input_tokens.unwrap_or(ctx.input_tokens);
+        let record = ConversationRecord {
+            id: Uuid::new_v4().to_string(),
+            model: model.to_string(),
+            endpoint: endpoint.to_string(),
+            system_prompt: system_prompt.clone(),
+            request_messages: messages.to_string(),
+            response_content: ctx.collected_response_text.clone(),
+            input_tokens: final_input_tokens,
+            output_tokens: ctx.output_tokens,
+            stop_reason: "end_turn".to_string(),
+            stream: true,
+            duration_ms,
+        };
+        let db_clone = db.clone();
+        tokio::spawn(async move { db_clone.save_conversation(record).await });
+    }
+}
+
 /// 处理非流式请求
 async fn handle_non_stream_request(
     provider: std::sync::Arc<crate::kiro::provider::KiroProvider>,
@@ -461,6 +539,12 @@ async fn handle_non_stream_request(
     input_tokens: i32,
     thinking_enabled: bool,
     tool_name_map: std::collections::HashMap<String, String>,
+    db: Option<ConversationDb>,
+    db_model: String,
+    db_endpoint: String,
+    db_system_prompt: Option<String>,
+    db_messages: String,
+    start_time: Instant,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let response = match provider.call_api(request_body).await {
@@ -635,6 +719,26 @@ async fn handle_non_stream_request(
         }
     });
 
+    // 保存对话到数据库
+    if let Some(db) = db {
+        let duration_ms = start_time.elapsed().as_millis() as i64;
+        let response_content_str = serde_json::to_string(&content).unwrap_or_default();
+        let record = ConversationRecord {
+            id: Uuid::new_v4().to_string(),
+            model: db_model,
+            endpoint: db_endpoint,
+            system_prompt: db_system_prompt,
+            request_messages: db_messages,
+            response_content: response_content_str,
+            input_tokens: final_input_tokens,
+            output_tokens,
+            stop_reason: stop_reason.clone(),
+            stream: false,
+            duration_ms,
+        };
+        tokio::spawn(async move { db.save_conversation(record).await });
+    }
+
     (StatusCode::OK, Json(response_body)).into_response()
 }
 
@@ -709,6 +813,8 @@ pub async fn post_messages_cc(
     State(state): State<AppState>,
     JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
+    let start_time = Instant::now();
+
     tracing::info!(
         model = %payload.model,
         max_tokens = %payload.max_tokens,
@@ -716,6 +822,12 @@ pub async fn post_messages_cc(
         message_count = %payload.messages.len(),
         "Received POST /cc/v1/messages request"
     );
+
+    // 保存请求数据用于数据库记录
+    let db_system_prompt = payload.system.as_ref().and_then(|s| serde_json::to_string(s).ok());
+    let db_messages = serde_json::to_string(&payload.messages).unwrap_or_default();
+    let db_model = payload.model.clone();
+    let db = state.db.clone();
 
     // 检查 KiroProvider 是否可用
     let provider = match &state.kiro_provider {
@@ -821,12 +933,21 @@ pub async fn post_messages_cc(
             input_tokens,
             thinking_enabled,
             tool_name_map,
+            db,
+            db_model,
+            "cc_v1".to_string(),
+            db_system_prompt,
+            db_messages,
+            start_time,
         )
         .await
     } else {
         // 非流式响应：仅在配置开启时提取 thinking 块
         let extract_thinking = state.extract_thinking && thinking_enabled;
-        handle_non_stream_request(provider, &request_body, &payload.model, input_tokens, extract_thinking, tool_name_map).await
+        handle_non_stream_request(
+            provider, &request_body, &payload.model, input_tokens, extract_thinking, tool_name_map,
+            db, db_model, "cc_v1".to_string(), db_system_prompt, db_messages, start_time,
+        ).await
     }
 }
 
@@ -841,6 +962,12 @@ async fn handle_stream_request_buffered(
     estimated_input_tokens: i32,
     thinking_enabled: bool,
     tool_name_map: std::collections::HashMap<String, String>,
+    db: Option<ConversationDb>,
+    db_model: String,
+    db_endpoint: String,
+    db_system_prompt: Option<String>,
+    db_messages: String,
+    start_time: Instant,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let response = match provider.call_api_stream(request_body).await {
@@ -852,7 +979,7 @@ async fn handle_stream_request_buffered(
     let ctx = BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled, tool_name_map);
 
     // 创建缓冲 SSE 流
-    let stream = create_buffered_sse_stream(response, ctx);
+    let stream = create_buffered_sse_stream(response, ctx, db, db_model, db_endpoint, db_system_prompt, db_messages, start_time);
 
     // 返回 SSE 响应
     Response::builder()
@@ -874,6 +1001,12 @@ async fn handle_stream_request_buffered(
 fn create_buffered_sse_stream(
     response: reqwest::Response,
     ctx: BufferedStreamContext,
+    db: Option<ConversationDb>,
+    db_model: String,
+    db_endpoint: String,
+    db_system_prompt: Option<String>,
+    db_messages: String,
+    start_time: Instant,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     let body_stream = response.bytes_stream();
 
@@ -884,8 +1017,10 @@ fn create_buffered_sse_stream(
             EventStreamDecoder::new(),
             false,
             interval(Duration::from_secs(PING_INTERVAL_SECS)),
+            db, db_model, db_endpoint, db_system_prompt, db_messages, start_time,
         ),
-        |(mut body_stream, mut ctx, mut decoder, finished, mut ping_interval)| async move {
+        |(mut body_stream, mut ctx, mut decoder, finished, mut ping_interval,
+          db, db_model, db_endpoint, db_system_prompt, db_messages, start_time)| async move {
             if finished {
                 return None;
             }
@@ -900,7 +1035,7 @@ fn create_buffered_sse_stream(
                     _ = ping_interval.tick() => {
                         tracing::trace!("发送 ping 保活事件（缓冲模式）");
                         let bytes: Vec<Result<Bytes, Infallible>> = vec![Ok(create_ping_sse())];
-                        return Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval)));
+                        return Some((stream::iter(bytes), (body_stream, ctx, decoder, false, ping_interval, db, db_model, db_endpoint, db_system_prompt, db_messages, start_time)));
                     }
 
                     // 然后处理数据流
@@ -929,22 +1064,60 @@ fn create_buffered_sse_stream(
                             }
                             Some(Err(e)) => {
                                 tracing::error!("读取响应流失败: {}", e);
+                                // 保存对话到数据库
+                                if let Some(db) = &db {
+                                    let duration_ms = start_time.elapsed().as_millis() as i64;
+                                    let record = ConversationRecord {
+                                        id: Uuid::new_v4().to_string(),
+                                        model: db_model.clone(),
+                                        endpoint: db_endpoint.clone(),
+                                        system_prompt: db_system_prompt.clone(),
+                                        request_messages: db_messages.clone(),
+                                        response_content: ctx.collected_response_text().to_string(),
+                                        input_tokens: ctx.final_input_tokens(),
+                                        output_tokens: ctx.output_tokens(),
+                                        stop_reason: "error".to_string(),
+                                        stream: true,
+                                        duration_ms,
+                                    };
+                                    let db_clone = db.clone();
+                                    tokio::spawn(async move { db_clone.save_conversation(record).await });
+                                }
                                 // 发生错误，完成处理并返回所有事件
                                 let all_events = ctx.finish_and_get_all_events();
                                 let bytes: Vec<Result<Bytes, Infallible>> = all_events
                                     .into_iter()
                                     .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                     .collect();
-                                return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)));
+                                return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, db, db_model, db_endpoint, db_system_prompt, db_messages, start_time)));
                             }
                             None => {
+                                // 保存对话到数据库
+                                if let Some(db) = &db {
+                                    let duration_ms = start_time.elapsed().as_millis() as i64;
+                                    let record = ConversationRecord {
+                                        id: Uuid::new_v4().to_string(),
+                                        model: db_model.clone(),
+                                        endpoint: db_endpoint.clone(),
+                                        system_prompt: db_system_prompt.clone(),
+                                        request_messages: db_messages.clone(),
+                                        response_content: ctx.collected_response_text().to_string(),
+                                        input_tokens: ctx.final_input_tokens(),
+                                        output_tokens: ctx.output_tokens(),
+                                        stop_reason: "end_turn".to_string(),
+                                        stream: true,
+                                        duration_ms,
+                                    };
+                                    let db_clone = db.clone();
+                                    tokio::spawn(async move { db_clone.save_conversation(record).await });
+                                }
                                 // 流结束，完成处理并返回所有事件（已更正 input_tokens）
                                 let all_events = ctx.finish_and_get_all_events();
                                 let bytes: Vec<Result<Bytes, Infallible>> = all_events
                                     .into_iter()
                                     .map(|e| Ok(Bytes::from(e.to_sse_string())))
                                     .collect();
-                                return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval)));
+                                return Some((stream::iter(bytes), (body_stream, ctx, decoder, true, ping_interval, db, db_model, db_endpoint, db_system_prompt, db_messages, start_time)));
                             }
                         }
                     }

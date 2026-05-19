@@ -542,6 +542,8 @@ pub struct StreamContext {
     /// 是否需要剥离 thinking 内容开头的换行符
     /// 模型输出 `<thinking>\n` 时，`\n` 可能与标签在同一 chunk 或下一 chunk
     strip_thinking_leading_newline: bool,
+    /// 累积的完整响应文本（用于数据库保存）
+    pub collected_response_text: String,
 }
 
 impl StreamContext {
@@ -568,6 +570,7 @@ impl StreamContext {
             thinking_block_index: None,
             text_block_index: None,
             strip_thinking_leading_newline: false,
+            collected_response_text: String::new(),
         }
     }
 
@@ -681,6 +684,8 @@ impl StreamContext {
         if content.is_empty() {
             return Vec::new();
         }
+
+        self.collected_response_text.push_str(content);
 
         // 估算 tokens
         self.output_tokens += estimate_tokens(content);
@@ -1220,6 +1225,21 @@ impl BufferedStreamContext {
         }
 
         std::mem::take(&mut self.event_buffer)
+    }
+
+    /// 获取累积的响应文本（用于数据库保存）
+    pub fn collected_response_text(&self) -> &str {
+        &self.inner.collected_response_text
+    }
+
+    /// 获取输出 token 数
+    pub fn output_tokens(&self) -> i32 {
+        self.inner.output_tokens
+    }
+
+    /// 获取最终的 input_tokens
+    pub fn final_input_tokens(&self) -> i32 {
+        self.inner.context_input_tokens.unwrap_or(self.estimated_input_tokens)
     }
 }
 

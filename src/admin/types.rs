@@ -55,6 +55,15 @@ pub struct CredentialStatusItem {
     /// 代理 URL（用于前端展示）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<String>,
+    /// 代理认证用户名
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_username: Option<String>,
+    /// 代理认证密码
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_password: Option<String>,
+    /// 凭据级 Machine ID（64 位十六进制字符串）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
     /// Token 刷新连续失败次数
     pub refresh_failure_count: u32,
     /// 禁用原因
@@ -62,6 +71,21 @@ pub struct CredentialStatusItem {
     pub disabled_reason: Option<String>,
     /// 端点名称（决定该凭据走哪套 Kiro API，已回退到默认端点）
     pub endpoint: String,
+    /// 订阅等级
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscription_title: Option<String>,
+    /// 用量百分比（0-100，None 表示未获取）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_percentage: Option<f64>,
+    /// 当前使用量
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_usage: Option<f64>,
+    /// 使用限额
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage_limit: Option<f64>,
+    /// 余额刷新错误信息（None 表示无错误或未刷新，Some 包含失败原因）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub balance_error: Option<String>,
 }
 
 // ============ 操作请求 ============
@@ -80,6 +104,34 @@ pub struct SetDisabledRequest {
 pub struct SetPriorityRequest {
     /// 新优先级值
     pub priority: u32,
+}
+
+/// 修改邮箱请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetEmailRequest {
+    /// 新邮箱地址
+    pub email: String,
+}
+
+/// 修改代理配置请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetProxyRequest {
+    /// 代理 URL（None 或空字符串表示不使用凭据级代理，回退到全局代理）
+    pub proxy_url: Option<String>,
+    /// 代理认证用户名
+    pub proxy_username: Option<String>,
+    /// 代理认证密码
+    pub proxy_password: Option<String>,
+}
+
+/// 修改 Machine ID 请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetMachineIdRequest {
+    /// 凭据级 Machine ID（64 位十六进制字符串或 UUID 格式）
+    pub machine_id: Option<String>,
 }
 
 /// 添加凭据请求
@@ -176,24 +228,90 @@ pub struct BalanceResponse {
     pub usage_percentage: f64,
     /// 下次重置时间（Unix 时间戳）
     pub next_reset_at: Option<f64>,
+    /// 是否为缓存数据（上游获取失败时兜底返回）
+    #[serde(default)]
+    pub stale: bool,
 }
 
-// ============ 负载均衡配置 ============
+// ============ 关键词替换 ============
 
-/// 负载均衡模式响应
+/// 关键词替换条目
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeywordReplacementItem {
+    /// 唯一标识
+    pub id: String,
+    /// 匹配模式
+    pub pattern: String,
+    /// 替换内容
+    pub replacement: String,
+    /// 是否为正则替换
+    pub is_regex: bool,
+}
+
+/// 关键词替换列表响应
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LoadBalancingModeResponse {
-    /// 当前模式（"priority" 或 "balanced"）
-    pub mode: String,
+pub struct KeywordReplacementsResponse {
+    /// 关键词替换列表
+    pub replacements: Vec<KeywordReplacementItem>,
 }
 
-/// 设置负载均衡模式请求
+/// 新增关键词替换请求
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SetLoadBalancingModeRequest {
-    /// 模式（"priority" 或 "balanced"）
-    pub mode: String,
+pub struct AddKeywordReplacementRequest {
+    /// 唯一标识
+    pub id: String,
+    /// 匹配模式
+    pub pattern: String,
+    /// 替换内容
+    pub replacement: String,
+    /// 是否为正则替换
+    #[serde(default)]
+    pub is_regex: bool,
+}
+
+/// 更新关键词替换请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateKeywordReplacementRequest {
+    /// 匹配模式
+    pub pattern: String,
+    /// 替换内容
+    pub replacement: String,
+    /// 是否为正则替换
+    #[serde(default)]
+    pub is_regex: bool,
+}
+
+// ============ 统一 Admin 配置 ============
+
+/// Admin 可编辑的配置响应（从 config.json 读取的安全子集）
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminConfigResponse {
+    /// 负载均衡模式
+    pub load_balancing_mode: String,
+    /// 关键词替换功能是否启用
+    pub keyword_replacement_enabled: bool,
+    /// 数据库文件路径
+    pub db_path: Option<String>,
+}
+
+/// 更新 Admin 配置请求（所有字段均为可选，仅更新传入的字段）
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAdminConfigRequest {
+    /// 负载均衡模式
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_balancing_mode: Option<String>,
+    /// 关键词替换功能是否启用
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyword_replacement_enabled: Option<bool>,
+    /// 数据库文件路径
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub db_path: Option<String>,
 }
 
 // ============ 通用响应 ============
