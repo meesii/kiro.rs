@@ -412,8 +412,14 @@ struct CredentialEntry {
     disabled_reason: Option<DisabledReason>,
     /// API 调用成功次数
     success_count: u64,
+    /// 负载均衡派发次数（含失败请求，balanced 模式按此轮换）
+    dispatch_count: u64,
     /// 最后一次 API 调用时间（RFC3339 格式）
     last_used_at: Option<String>,
+    /// 最近一次上游 API 错误摘要（供管理面板展示）
+    last_api_error: Option<String>,
+    /// 最近一次上游 API 错误时间（RFC3339 格式）
+    last_api_error_at: Option<String>,
 }
 
 /// 禁用原因
@@ -437,7 +443,13 @@ enum DisabledReason {
 #[derive(Serialize, Deserialize)]
 struct StatsEntry {
     success_count: u64,
+    #[serde(default)]
+    dispatch_count: u64,
     last_used_at: Option<String>,
+    #[serde(default)]
+    last_api_error: Option<String>,
+    #[serde(default)]
+    last_api_error_at: Option<String>,
 }
 
 // ============================================================================
@@ -474,6 +486,12 @@ pub struct CredentialEntrySnapshot {
     pub success_count: u64,
     /// 最后一次 API 调用时间（RFC3339 格式）
     pub last_used_at: Option<String>,
+    /// 最近一次上游 API 错误摘要
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_api_error: Option<String>,
+    /// 最近一次上游 API 错误时间（RFC3339 格式）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_api_error_at: Option<String>,
     /// 是否配置了凭据级代理
     pub has_proxy: bool,
     /// 代理 URL（用于前端展示）
@@ -617,7 +635,10 @@ impl MultiTokenManager {
                         None
                     },
                     success_count: 0,
+                    dispatch_count: 0,
                     last_used_at: None,
+                    last_api_error: None,
+                    last_api_error_at: None,
                 }
             })
             .collect();
@@ -654,7 +675,6 @@ impl MultiTokenManager {
             anyhow::bail!("检测到重复的凭据 ID: {:?}", duplicate_ids);
         }
 
-        // 选择初始凭据：优先级最高（priority 最小）的可用凭据，无可用凭据时为 0
         let initial_id = entries
             .iter()
             .filter(|e| !e.disabled)
@@ -805,16 +825,13 @@ impl MultiTokenManager {
 
         match mode {
             "balanced" => {
-                // Least-Used 策略：选择成功次数最少的凭据
-                // 平局时按优先级排序（数字越小优先级越高）
                 let entry = available
                     .iter()
-                    .min_by_key(|e| (e.success_count, e.credentials.priority))?;
+                    .min_by_key(|e| (e.dispatch_count, e.credentials.priority))?;
 
                 Some((entry.id, entry.credentials.clone()))
             }
             _ => {
-                // priority 模式（默认）：选择优先级最高的
                 let entry = available.iter().min_by_key(|e| e.credentials.priority)?;
                 Some((entry.id, entry.credentials.clone()))
             }
@@ -904,6 +921,8 @@ impl MultiTokenManager {
                 }
             };
 
+            self.record_dispatch(id);
+
             // 尝试获取/刷新 Token
             match self.try_ensure_token(id, &credentials).await {
                 Ok(ctx) => {
@@ -935,7 +954,6 @@ impl MultiTokenManager {
         let entries = self.entries.lock();
         let mut current_id = self.current_id.lock();
 
-        // 选择优先级最高的未禁用凭据（不排除当前凭据）
         if let Some(best) = entries
             .iter()
             .filter(|e| !e.disabled)
@@ -1136,7 +1154,10 @@ impl MultiTokenManager {
         for entry in entries.iter_mut() {
             if let Some(s) = stats.get(&entry.id.to_string()) {
                 entry.success_count = s.success_count;
+                entry.dispatch_count = s.dispatch_count;
                 entry.last_used_at = s.last_used_at.clone();
+                entry.last_api_error = s.last_api_error.clone();
+                entry.last_api_error_at = s.last_api_error_at.clone();
             }
         }
         *self.last_stats_save_at.lock() = Some(Instant::now());
@@ -1160,7 +1181,10 @@ impl MultiTokenManager {
                         e.id.to_string(),
                         StatsEntry {
                             success_count: e.success_count,
+                            dispatch_count: e.dispatch_count,
                             last_used_at: e.last_used_at.clone(),
+                            last_api_error: e.last_api_error.clone(),
+                            last_api_error_at: e.last_api_error_at.clone(),
                         },
                     )
                 })
@@ -1209,6 +1233,8 @@ impl MultiTokenManager {
             if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
                 entry.failure_count = 0;
                 entry.refresh_failure_count = 0;
+                entry.last_api_error = None;
+                entry.last_api_error_at = None;
                 entry.success_count += 1;
                 entry.last_used_at = Some(Utc::now().to_rfc3339());
                 tracing::debug!(
@@ -1258,7 +1284,6 @@ impl MultiTokenManager {
                 entry.disabled_reason = Some(DisabledReason::TooManyFailures);
                 tracing::error!("凭据 #{} 已连续失败 {} 次，已被禁用", id, failure_count);
 
-                // 切换到优先级最高的可用凭据
                 if let Some(next) = entries
                     .iter()
                     .filter(|e| !e.disabled)
@@ -1279,6 +1304,31 @@ impl MultiTokenManager {
         };
         self.save_stats_debounced();
         result
+    }
+
+    /// 记录凭据被选中用于 API 调用（balanced 模式按派发次数轮换）
+    fn record_dispatch(&self, id: u64) {
+        {
+            let mut entries = self.entries.lock();
+            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                entry.dispatch_count += 1;
+            }
+        }
+        self.save_stats_debounced();
+    }
+
+    /// 记录上游 API 错误（不禁用、不增加 failure_count，供管理面板展示）
+    pub fn report_api_error(&self, id: u64, status: u16, body: &str) {
+        let msg = format_api_error(status, body);
+        {
+            let mut entries = self.entries.lock();
+            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                entry.last_api_error = Some(msg);
+                entry.last_api_error_at = Some(Utc::now().to_rfc3339());
+                entry.dispatch_count += 1;
+            }
+        }
+        self.save_stats_debounced();
     }
 
     /// 报告指定凭据额度已用尽
@@ -1448,13 +1498,44 @@ impl MultiTokenManager {
     pub fn switch_to_next(&self) -> bool {
         let entries = self.entries.lock();
         let mut current_id = self.current_id.lock();
+        let current = *current_id;
 
-        // 选择优先级最高的未禁用凭据（排除当前凭据）
-        if let Some(next) = entries
+        let candidates: Vec<_> = entries
             .iter()
-            .filter(|e| !e.disabled && e.id != *current_id)
-            .min_by_key(|e| e.credentials.priority)
-        {
+            .filter(|e| !e.disabled && e.id != current)
+            .collect();
+
+        if candidates.is_empty() {
+            return entries.iter().any(|e| e.id == current && !e.disabled);
+        }
+
+        let cur_priority = entries
+            .iter()
+            .find(|e| e.id == current)
+            .map(|e| e.credentials.priority)
+            .unwrap_or(0);
+
+        let same_priority: Vec<_> = candidates
+            .iter()
+            .filter(|e| e.credentials.priority == cur_priority)
+            .copied()
+            .collect();
+
+        let next = if !same_priority.is_empty() {
+            same_priority
+                .iter()
+                .filter(|e| e.id > current)
+                .min_by_key(|e| e.id)
+                .or_else(|| same_priority.iter().min_by_key(|e| e.id))
+                .copied()
+        } else {
+            candidates
+                .iter()
+                .min_by_key(|e| e.credentials.priority)
+                .copied()
+        };
+
+        if let Some(next) = next {
             *current_id = next.id;
             tracing::info!(
                 "已切换到凭据 #{}（优先级 {}）",
@@ -1463,8 +1544,7 @@ impl MultiTokenManager {
             );
             true
         } else {
-            // 没有其他可用凭据，检查当前凭据是否可用
-            entries.iter().any(|e| e.id == *current_id && !e.disabled)
+            false
         }
     }
 
@@ -1521,6 +1601,8 @@ impl MultiTokenManager {
                     email: e.credentials.email.clone(),
                     success_count: e.success_count,
                     last_used_at: e.last_used_at.clone(),
+                    last_api_error: e.last_api_error.clone(),
+                    last_api_error_at: e.last_api_error_at.clone(),
                     has_proxy: e.credentials.proxy_url.is_some(),
                     proxy_url: e.credentials.proxy_url.clone(),
                     proxy_username: e.credentials.proxy_username.clone(),
@@ -1560,6 +1642,8 @@ impl MultiTokenManager {
                 entry.failure_count = 0;
                 entry.refresh_failure_count = 0;
                 entry.disabled_reason = None;
+                entry.last_api_error = None;
+                entry.last_api_error_at = None;
             } else {
                 entry.disabled_reason = Some(DisabledReason::Manual);
             }
@@ -1662,7 +1746,10 @@ impl MultiTokenManager {
             entry.refresh_failure_count = 0;
             entry.disabled = false;
             entry.disabled_reason = None;
+            entry.last_api_error = None;
+            entry.last_api_error_at = None;
         }
+        self.save_stats_debounced();
         // 持久化更改
         self.persist_credentials()?;
         Ok(())
@@ -1875,7 +1962,10 @@ impl MultiTokenManager {
                 disabled: false,
                 disabled_reason: None,
                 success_count: 0,
+                dispatch_count: 0,
                 last_used_at: None,
+                last_api_error: None,
+                last_api_error_at: None,
             });
         }
 
@@ -2050,9 +2140,51 @@ impl Drop for MultiTokenManager {
     }
 }
 
+/// 将上游 HTTP 错误压缩为管理面板可展示的短消息
+fn format_api_error(status: u16, body: &str) -> String {
+    const MAX_LEN: usize = 240;
+
+    let detail = if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+        v.get("message")
+            .and_then(|m| m.as_str())
+            .or_else(|| v.get("error").and_then(|e| e.as_str()))
+            .map(|s| s.to_string())
+    } else {
+        None
+    }
+    .unwrap_or_else(|| {
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
+            String::new()
+        } else {
+            trimmed.to_string()
+        }
+    });
+
+    let mut msg = if detail.is_empty() {
+        format!("HTTP {}", status)
+    } else {
+        format!("HTTP {} {}", status, detail)
+    };
+
+    if msg.len() > MAX_LEN {
+        msg.truncate(MAX_LEN);
+        msg.push('…');
+    }
+    msg
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_api_error_extracts_json_message() {
+        let body = r#"{"message":"Due to suspicious activity, limits imposed","reason":null}"#;
+        let msg = format_api_error(429, body);
+        assert!(msg.starts_with("HTTP 429 "));
+        assert!(msg.contains("suspicious activity"));
+    }
 
     #[test]
     fn test_is_token_expired_with_expired_token() {
