@@ -491,13 +491,13 @@ function ConversationDetailDialog({ conversation, on_open_change }: { conversati
 
                     <div className="flex min-h-0 max-h-80 shrink-0 flex-col gap-2 overflow-hidden">
                         <h4 className="shrink-0 text-sm font-medium">请求消息</h4>
-                        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1  flex flex-col gap-2">
                             {messages.map((m, i) => (
-                                <div key={i}>
+                                <div key={i} className="flex flex-col ">
                                     <Badge variant="outline" className="mb-1.5 text-xs uppercase">
                                         {m.role}
                                     </Badge>
-                                    <DetailTextarea value={m.content} box_class="max-h-32" />
+                                    <DetailTextarea value={m.content} />
                                 </div>
                             ))}
                         </div>
