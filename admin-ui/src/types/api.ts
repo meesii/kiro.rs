@@ -31,6 +31,10 @@ export interface CredentialStatusItem {
     usageLimit: number | null;
     /** 余额刷新错误信息 */
     balanceError: string | null;
+    /** 最近一次上游 API 调用错误摘要 */
+    lastApiError: string | null;
+    /** 最近一次上游 API 调用错误时间 */
+    lastApiErrorAt: string | null;
 }
 
 export interface CredentialsStatusResponse {

@@ -86,6 +86,12 @@ pub struct CredentialStatusItem {
     /// 余额刷新错误信息（None 表示无错误或未刷新，Some 包含失败原因）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub balance_error: Option<String>,
+    /// 最近一次上游 API 调用错误摘要
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_api_error: Option<String>,
+    /// 最近一次上游 API 调用错误时间（RFC3339 格式）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_api_error_at: Option<String>,
 }
 
 // ============ 操作请求 ============

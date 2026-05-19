@@ -105,6 +105,8 @@ impl AdminService {
                     current_usage: None,
                     usage_limit: None,
                     balance_error: None,
+                    last_api_error: entry.last_api_error.clone(),
+                    last_api_error_at: entry.last_api_error_at.clone(),
                 }
             })
             .collect();

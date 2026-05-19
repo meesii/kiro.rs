@@ -201,6 +201,22 @@ export function CredentialCard({
                                 <TooltipContent>{cred.balanceError}</TooltipContent>
                             </Tooltip>
                         )}
+                        {cred.lastApiError && (
+                            <Tooltip>
+                                <TooltipTrigger>
+                                    <Badge variant="destructive" className="cursor-default text-xs">
+                                        <TriangleAlert className="mr-1 size-3" />
+                                        API 异常
+                                    </Badge>
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-sm">
+                                    {cred.lastApiErrorAt && (
+                                        <p className="mb-1 text-xs text-muted-foreground">{fmt.relative_time(cred.lastApiErrorAt)}</p>
+                                    )}
+                                    <p className="text-sm break-words">{cred.lastApiError}</p>
+                                </TooltipContent>
+                            </Tooltip>
+                        )}
                     </div>
 
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
