@@ -151,11 +151,14 @@ impl KiroProvider {
             let endpoint = match self.endpoint_for(&ctx.credentials) {
                 Ok(e) => e,
                 Err(e) => {
-                    last_error = Some(Self::mcp_err_msg(ctx.id, ctx.credentials.email.as_deref(), e));
-                    if !self.token_manager.switch_to_next() {
-                        break;
+                    let msg = e.to_string();
+                    self.token_manager.report_api_error(ctx.id, 0, &msg);
+                    last_error = Some(Self::mcp_err_msg(ctx.id, ctx.credentials.email.as_deref(), msg));
+                    if self.token_manager.report_failure(ctx.id) {
+                        let _ = self.token_manager.switch_to_next();
+                        continue;
                     }
-                    continue;
+                    break;
                 }
             };
 
@@ -190,10 +193,11 @@ impl KiroProvider {
                     self.token_manager
                         .report_api_error(ctx.id, 0, &e.to_string());
                     last_error = Some(Self::mcp_err_msg(ctx.id, ctx.credentials.email.as_deref(), e));
-                    if !self.token_manager.switch_to_next() {
-                        break;
+                    if self.token_manager.report_failure(ctx.id) {
+                        let _ = self.token_manager.switch_to_next();
+                        continue;
                     }
-                    continue;
+                    break;
                 }
             };
 
@@ -288,16 +292,19 @@ impl KiroProvider {
             let endpoint = match self.endpoint_for(&ctx.credentials) {
                 Ok(e) => e,
                 Err(e) => {
+                    self.token_manager
+                        .report_api_error(ctx.id, 0, &e.to_string());
                     last_error = Some(Self::api_err_msg(
                         api_type,
                         ctx.id,
                         ctx.credentials.email.as_deref(),
                         e,
                     ));
-                    if !self.token_manager.switch_to_next() {
-                        break;
+                    if self.token_manager.report_failure(ctx.id) {
+                        let _ = self.token_manager.switch_to_next();
+                        continue;
                     }
-                    continue;
+                    break;
                 }
             };
 
@@ -337,10 +344,11 @@ impl KiroProvider {
                         ctx.credentials.email.as_deref(),
                         e,
                     ));
-                    if !self.token_manager.switch_to_next() {
-                        break;
+                    if self.token_manager.report_failure(ctx.id) {
+                        let _ = self.token_manager.switch_to_next();
+                        continue;
                     }
-                    continue;
+                    break;
                 }
             };
 
@@ -517,7 +525,11 @@ impl KiroProvider {
             body
         );
         let err = Self::api_err(api_type, cred_id, email, status, body);
-        (err, token_manager.switch_to_next())
+        let has_available = token_manager.report_failure(cred_id);
+        if has_available {
+            let _ = token_manager.switch_to_next();
+        }
+        (err, has_available)
     }
 
     fn mcp_fail_switch(
@@ -535,6 +547,10 @@ impl KiroProvider {
             body
         );
         let err = Self::mcp_err(cred_id, email, status, body);
-        (err, token_manager.switch_to_next())
+        let has_available = token_manager.report_failure(cred_id);
+        if has_available {
+            let _ = token_manager.switch_to_next();
+        }
+        (err, has_available)
     }
 }
