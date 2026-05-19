@@ -213,7 +213,7 @@ export function CredentialCard({
                                     {cred.lastApiErrorAt && (
                                         <p className="mb-1 text-xs text-muted-foreground">{fmt.relative_time(cred.lastApiErrorAt)}</p>
                                     )}
-                                    <p className="text-sm break-words">{cred.lastApiError}</p>
+                                    <p className="text-sm wrap-break-word">{cred.lastApiError}</p>
                                 </TooltipContent>
                             </Tooltip>
                         )}
