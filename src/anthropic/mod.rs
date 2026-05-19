@@ -24,6 +24,7 @@
 
 mod converter;
 mod handlers;
+mod keyword_replace;
 mod middleware;
 mod router;
 mod stream;

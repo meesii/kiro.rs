@@ -700,21 +700,19 @@ impl MultiTokenManager {
         &self.config
     }
 
-    /// 对请求体应用关键词替换（使用内存缓存，与 config.json 同步）
-    ///
-    /// 仅在关键词替换功能开启时执行替换，支持普通字符串和正则两种模式。
-    pub fn apply_keyword_replacements(&self, body: &str) -> String {
+    /// 对单段文本应用关键词替换（使用内存缓存，与 config.json 同步）
+    pub fn apply_keyword_replacements_str(&self, text: &str) -> String {
         let enabled = *self.keyword_replacement_enabled.lock();
         if !enabled {
-            return body.to_string();
+            return text.to_string();
         }
 
         let replacements = self.keyword_replacements.lock();
         if replacements.is_empty() {
-            return body.to_string();
+            return text.to_string();
         }
 
-        let mut result = body.to_string();
+        let mut result = text.to_string();
         for r in replacements.iter() {
             if r.is_regex {
                 match regex::Regex::new(&r.pattern) {
@@ -736,6 +734,11 @@ impl MultiTokenManager {
         }
 
         result
+    }
+
+    /// 对序列化后的请求体应用关键词替换
+    pub fn apply_keyword_replacements(&self, body: &str) -> String {
+        self.apply_keyword_replacements_str(body)
     }
 
     /// 同步关键词配置缓存（Admin API 修改 config.json 后调用）

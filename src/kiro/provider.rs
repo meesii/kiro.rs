@@ -120,6 +120,11 @@ impl KiroProvider {
         self.call_api_with_retry(request_body, true).await
     }
 
+    /// 多凭据 Token 管理器（关键词替换等配置由此读取）
+    pub fn token_manager(&self) -> &MultiTokenManager {
+        &self.token_manager
+    }
+
     /// 发送 MCP API 请求（WebSearch 等工具调用）
     pub async fn call_mcp(&self, request_body: &str) -> anyhow::Result<reqwest::Response> {
         self.call_mcp_with_retry(request_body).await
