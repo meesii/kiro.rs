@@ -735,14 +735,6 @@ impl MultiTokenManager {
             }
         }
 
-        if result != body {
-            tracing::info!(
-                "关键词替换已应用 ({} 条规则，body 长度 {} -> {})",
-                replacements.len(),
-                body.len(),
-                result.len()
-            );
-        }
         result
     }
 
