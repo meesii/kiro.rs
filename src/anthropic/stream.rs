@@ -509,6 +509,109 @@ impl SseStateManager {
 
 use super::converter::get_context_window_size;
 
+/// 流式工具调用收集器（用于数据库完整响应归档）
+struct ToolUseCollector {
+    json_buffers: HashMap<String, String>,
+    completed: Vec<serde_json::Value>,
+}
+
+impl ToolUseCollector {
+    fn new() -> Self {
+        Self {
+            json_buffers: HashMap::new(),
+            completed: Vec::new(),
+        }
+    }
+
+    fn on_tool_use(
+        &mut self,
+        tool_use: &crate::kiro::model::events::ToolUseEvent,
+        tool_name_map: &HashMap<String, String>,
+    ) {
+        let buffer = self
+            .json_buffers
+            .entry(tool_use.tool_use_id.clone())
+            .or_insert_with(String::new);
+        buffer.push_str(&tool_use.input);
+
+        if !tool_use.stop {
+            return;
+        }
+
+        let input: serde_json::Value = if buffer.is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(buffer).unwrap_or_else(|e| {
+                tracing::warn!(
+                    "工具输入 JSON 解析失败: {}, tool_use_id: {}",
+                    e,
+                    tool_use.tool_use_id
+                );
+                serde_json::json!({})
+            })
+        };
+
+        let original_name = tool_name_map
+            .get(&tool_use.name)
+            .cloned()
+            .unwrap_or_else(|| tool_use.name.clone());
+
+        self.completed.push(serde_json::json!({
+            "type": "tool_use",
+            "id": tool_use.tool_use_id,
+            "name": original_name,
+            "input": input
+        }));
+    }
+
+    fn completed_blocks(&self) -> &[serde_json::Value] {
+        &self.completed
+    }
+}
+
+/// 将助手文本与 tool_use 块组装为 Anthropic content 数组
+pub fn build_assistant_content_blocks(
+    text_content: &str,
+    tool_uses: &[serde_json::Value],
+    thinking_enabled: bool,
+) -> Vec<serde_json::Value> {
+    let mut content: Vec<serde_json::Value> = Vec::new();
+
+    if thinking_enabled {
+        let (thinking, remaining_text) = extract_thinking_from_complete_text(text_content);
+        if let Some(thinking_text) = thinking {
+            content.push(serde_json::json!({
+                "type": "thinking",
+                "thinking": thinking_text
+            }));
+        }
+        if !remaining_text.is_empty() {
+            content.push(serde_json::json!({
+                "type": "text",
+                "text": remaining_text
+            }));
+        }
+    } else if !text_content.is_empty() {
+        content.push(serde_json::json!({
+            "type": "text",
+            "text": text_content
+        }));
+    }
+
+    content.extend(tool_uses.iter().cloned());
+    content
+}
+
+/// 序列化助手响应内容供数据库保存
+pub fn format_assistant_content_for_db(
+    text_content: &str,
+    tool_uses: &[serde_json::Value],
+    thinking_enabled: bool,
+) -> String {
+    let blocks = build_assistant_content_blocks(text_content, tool_uses, thinking_enabled);
+    serde_json::to_string(&blocks).unwrap_or_default()
+}
+
 /// 流处理上下文
 pub struct StreamContext {
     /// SSE 状态管理器
@@ -544,6 +647,8 @@ pub struct StreamContext {
     strip_thinking_leading_newline: bool,
     /// 累积的完整响应文本（用于数据库保存）
     pub collected_response_text: String,
+    /// 已完成的 tool_use 块（用于数据库保存）
+    tool_collector: ToolUseCollector,
 }
 
 impl StreamContext {
@@ -571,7 +676,17 @@ impl StreamContext {
             text_block_index: None,
             strip_thinking_leading_newline: false,
             collected_response_text: String::new(),
+            tool_collector: ToolUseCollector::new(),
         }
+    }
+
+    /// 生成供数据库保存的完整响应 JSON（含 text / thinking / tool_use）
+    pub fn format_response_content_for_db(&self) -> String {
+        format_assistant_content_for_db(
+            &self.collected_response_text,
+            self.tool_collector.completed_blocks(),
+            self.thinking_enabled,
+        )
     }
 
     /// 生成 message_start 事件
@@ -1042,6 +1157,9 @@ impl StreamContext {
             }
         }
 
+        self.tool_collector
+            .on_tool_use(tool_use, &self.tool_name_map);
+
         events
     }
 
@@ -1227,9 +1345,9 @@ impl BufferedStreamContext {
         std::mem::take(&mut self.event_buffer)
     }
 
-    /// 获取累积的响应文本（用于数据库保存）
-    pub fn collected_response_text(&self) -> &str {
-        &self.inner.collected_response_text
+    /// 获取供数据库保存的完整响应 JSON
+    pub fn format_response_content_for_db(&self) -> String {
+        self.inner.format_response_content_for_db()
     }
 
     /// 获取输出 token 数

@@ -14,6 +14,7 @@ pub struct ConversationRecord {
     pub endpoint: String,
     pub system_prompt: Option<String>,
     pub request_messages: String,
+    pub request_tools: Option<String>,
     pub response_content: String,
     pub input_tokens: i32,
     pub output_tokens: i32,
@@ -32,6 +33,7 @@ pub struct ConversationRow {
     pub endpoint: String,
     pub system_prompt: Option<String>,
     pub request_messages: String,
+    pub request_tools: Option<String>,
     pub response_content: String,
     pub input_tokens: i32,
     pub output_tokens: i32,
@@ -128,6 +130,20 @@ pub struct ConversationDb {
     conn: Arc<Mutex<Connection>>,
 }
 
+fn migrate_conversations_table(conn: &Connection) -> anyhow::Result<()> {
+    let has_request_tools = conn
+        .prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'request_tools'")?
+        .exists([])?;
+    if !has_request_tools {
+        conn.execute(
+            "ALTER TABLE conversations ADD COLUMN request_tools TEXT",
+            [],
+        )?;
+        tracing::info!("已迁移 conversations 表：新增 request_tools 列");
+    }
+    Ok(())
+}
+
 impl ConversationDb {
     /// 初始化数据库连接并创建表
     pub fn init(db_path: &str) -> anyhow::Result<Self> {
@@ -148,6 +164,7 @@ impl ConversationDb {
                 endpoint TEXT NOT NULL,
                 system_prompt TEXT,
                 request_messages TEXT NOT NULL,
+                request_tools TEXT,
                 response_content TEXT NOT NULL DEFAULT '',
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -164,6 +181,8 @@ impl ConversationDb {
 
         conn.pragma_update(None, "journal_mode", "WAL")?;
 
+        migrate_conversations_table(&conn)?;
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -175,14 +194,15 @@ impl ConversationDb {
         let result = tokio::task::spawn_blocking(move || {
             let conn = conn.lock();
             conn.execute(
-                "INSERT INTO conversations (id, model, endpoint, system_prompt, request_messages, response_content, input_tokens, output_tokens, stop_reason, stream, duration_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT INTO conversations (id, model, endpoint, system_prompt, request_messages, request_tools, response_content, input_tokens, output_tokens, stop_reason, stream, duration_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 rusqlite::params![
                     record.id,
                     record.model,
                     record.endpoint,
                     record.system_prompt,
                     record.request_messages,
+                    record.request_tools,
                     record.response_content,
                     record.input_tokens,
                     record.output_tokens,
@@ -263,7 +283,7 @@ impl ConversationDb {
 
             // 查询数据
             let data_sql = format!(
-                "SELECT id, created_at, model, endpoint, system_prompt, request_messages, response_content, input_tokens, output_tokens, stop_reason, stream, duration_ms \
+                "SELECT id, created_at, model, endpoint, system_prompt, request_messages, request_tools, response_content, input_tokens, output_tokens, stop_reason, stream, duration_ms \
                  FROM conversations {} ORDER BY {} {} LIMIT ?{} OFFSET ?{}",
                 where_clause, sort_by, sort_order, params.len() + 1, params.len() + 2
             );
@@ -280,12 +300,13 @@ impl ConversationDb {
                     endpoint: row.get(3)?,
                     system_prompt: row.get(4)?,
                     request_messages: row.get(5)?,
-                    response_content: row.get(6)?,
-                    input_tokens: row.get(7)?,
-                    output_tokens: row.get(8)?,
-                    stop_reason: row.get(9)?,
-                    stream: row.get::<_, i32>(10)? != 0,
-                    duration_ms: row.get(11)?,
+                    request_tools: row.get(6)?,
+                    response_content: row.get(7)?,
+                    input_tokens: row.get(8)?,
+                    output_tokens: row.get(9)?,
+                    stop_reason: row.get(10)?,
+                    stream: row.get::<_, i32>(11)? != 0,
+                    duration_ms: row.get(12)?,
                 })
             })?;
 
