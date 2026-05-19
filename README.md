@@ -2,19 +2,6 @@
 
 一个用 Rust 编写的 Anthropic Claude API 兼容代理服务，将 Anthropic API 请求转换为 Kiro API 请求。
 
----
-
-<table>
-<tr>
-<td>
-<b>特别感谢</b>：<a href="https://co.yes.vg/register?ref=hank9999">YesCode</a> 为本项目提供了 AI API 额度赞助, YesCode 作为一家低调务实的 AI API 中转服务商 <br>
-长期以来提供稳定高可用的服务, 如您有意体验, 请点击链接注册体验 → <a href="https://co.yes.vg/register?ref=hank9999">立即访问</a>
-</td>
-</tr>
-</table>
-
----
-
 #### [LINUX DO 讨论帖](https://linux.do/t/topic/1571986)
 
 ## 免责声明
@@ -49,23 +36,23 @@
 ---
 
 - [开始](#开始)
-  - [1. 编译](#1-编译)
-  - [2. 最小配置](#2-最小配置)
-  - [3. 启动](#3-启动)
-  - [4. 验证](#4-验证)
-  - [Docker](#docker)
+    - [1. 编译](#1-编译)
+    - [2. 最小配置](#2-最小配置)
+    - [3. 启动](#3-启动)
+    - [4. 验证](#4-验证)
+    - [Docker](#docker)
 - [配置详解](#配置详解)
-  - [config.json](#configjson)
-  - [credentials.json](#credentialsjson)
-  - [Region 配置](#region-配置)
-  - [代理配置](#代理配置)
-  - [认证方式](#认证方式)
-  - [环境变量](#环境变量)
+    - [config.json](#configjson)
+    - [credentials.json](#credentialsjson)
+    - [Region 配置](#region-配置)
+    - [代理配置](#代理配置)
+    - [认证方式](#认证方式)
+    - [环境变量](#环境变量)
 - [API 端点](#api-端点)
-  - [标准端点 (/v1)](#标准端点-v1)
-  - [Claude Code 兼容端点 (/cc/v1)](#claude-code-兼容端点-ccv1)
-  - [Thinking 模式](#thinking-模式)
-  - [工具调用](#工具调用)
+    - [标准端点 (/v1)](#标准端点-v1)
+    - [Claude Code 兼容端点 (/cc/v1)](#claude-code-兼容端点-ccv1)
+    - [Thinking 模式](#thinking-模式)
+    - [工具调用](#工具调用)
 - [模型映射](#模型映射)
 - [Admin（可选）](#admin可选)
 - [注意事项](#注意事项)
@@ -81,6 +68,7 @@
 > PS: 如果不想编辑可以直接前往 Release 下载二进制文件
 
 > **前置步骤**：编译前需要先构建前端 Admin UI（用于嵌入到二进制中）：
+>
 > ```bash
 > cd admin-ui && pnpm install && pnpm build
 > ```
@@ -95,35 +83,39 @@ cargo build --release
 
 ```json
 {
-   "host": "127.0.0.1",
-   "port": 8990,
-   "apiKey": "sk-kiro-rs-qazWSXedcRFV123456",
-   "region": "us-east-1"
+    "host": "127.0.0.1",
+    "port": 8990,
+    "apiKey": "sk-kiro-rs-qazWSXedcRFV123456",
+    "region": "us-east-1"
 }
 ```
+
 > PS: 如果你需要 Web 管理面板, 请注意配置 `adminApiKey`
 
 创建 `credentials.json`（从 Kiro IDE 等中获取凭证信息）：
+
 > PS: 可以前往 Web 管理面板配置跳过本步骤
 > 如果你对凭据地域有疑惑, 请查看 [Region 配置](#region-配置)
 
 Social 认证：
+
 ```json
 {
-   "refreshToken": "你的刷新token",
-   "expiresAt": "2025-12-31T02:32:45.144Z",
-   "authMethod": "social"
+    "refreshToken": "你的刷新token",
+    "expiresAt": "2025-12-31T02:32:45.144Z",
+    "authMethod": "social"
 }
 ```
 
 IdC 认证：
+
 ```json
 {
-   "refreshToken": "你的刷新token",
-   "expiresAt": "2025-12-31T02:32:45.144Z",
-   "authMethod": "idc",
-   "clientId": "你的clientId",
-   "clientSecret": "你的clientSecret"
+    "refreshToken": "你的刷新token",
+    "expiresAt": "2025-12-31T02:32:45.144Z",
+    "authMethod": "idc",
+    "clientId": "你的clientId",
+    "clientSecret": "你的clientSecret"
 }
 ```
 
@@ -137,6 +129,12 @@ IdC 认证：
 
 ```bash
 ./target/release/kiro-rs -c /path/to/config.json --credentials /path/to/credentials.json
+```
+
+开发时也可直接用 Cargo 运行：
+
+```bash
+cargo run -- -c config.json
 ```
 
 ### 4. 验证
@@ -169,54 +167,73 @@ docker-compose up
 
 ### config.json
 
-| 字段 | 类型 | 默认值 | 描述 |
-|------|------|--------|------|
-| `host` | string | `127.0.0.1` | 服务监听地址 |
-| `port` | number | `8080` | 服务监听端口 |
-| `apiKey` | string | - | 自定义 API Key（用于客户端认证，必配） |
-| `region` | string | `us-east-1` | AWS 区域 |
-| `authRegion` | string | - | Auth Region（用于 Token 刷新），未配置时回退到 region |
-| `apiRegion` | string | - | API Region（用于 API 请求），未配置时回退到 region |
-| `kiroVersion` | string | `0.9.2` | Kiro 版本号 |
-| `machineId` | string | - | 自定义机器码（64位十六进制），不定义则自动生成 |
-| `systemVersion` | string | 随机 | 系统版本标识 |
-| `nodeVersion` | string | `22.21.1` | Node.js 版本标识 |
-| `tlsBackend` | string | `rustls` | TLS 后端：`rustls` 或 `native-tls` |
-| `countTokensApiUrl` | string | - | 外部 count_tokens API 地址 |
-| `countTokensApiKey` | string | - | 外部 count_tokens API 密钥 |
-| `countTokensAuthType` | string | `x-api-key` | 外部 API 认证类型：`x-api-key` 或 `bearer` |
-| `proxyUrl` | string | - | HTTP/SOCKS5 代理地址 |
-| `proxyUsername` | string | - | 代理用户名 |
-| `proxyPassword` | string | - | 代理密码 |
-| `adminApiKey` | string | - | Admin API 密钥，配置后启用凭据管理 API 和 Web 管理界面 |
-| `loadBalancingMode` | string | `priority` | 负载均衡模式：`priority`（按优先级）或 `balanced`（均衡分配） |
-| `extractThinking` | boolean | `true` | 非流式响应的 thinking 块提取。启用后 `<thinking>` 标签会被解析为独立的 `thinking` 内容块 |
-| `defaultEndpoint` | string | `ide` | 默认 Kiro 端点。凭据未显式指定 `endpoint` 时使用。当前支持：`ide` |
+| 字段                        | 类型    | 默认值               | 描述                                                                                     |
+| --------------------------- | ------- | -------------------- | ---------------------------------------------------------------------------------------- |
+| `host`                      | string  | `127.0.0.1`          | 服务监听地址                                                                             |
+| `port`                      | number  | `8080`               | 服务监听端口                                                                             |
+| `apiKey`                    | string  | -                    | 自定义 API Key（用于客户端认证，必配）                                                   |
+| `region`                    | string  | `us-east-1`          | AWS 区域                                                                                 |
+| `authRegion`                | string  | -                    | Auth Region（用于 Token 刷新），未配置时回退到 region                                    |
+| `apiRegion`                 | string  | -                    | API Region（用于 API 请求），未配置时回退到 region                                       |
+| `kiroVersion`               | string  | `0.9.2`              | Kiro 版本号                                                                              |
+| `machineId`                 | string  | -                    | 自定义机器码（64位十六进制），不定义则自动生成                                           |
+| `systemVersion`             | string  | 随机                 | 系统版本标识                                                                             |
+| `nodeVersion`               | string  | `22.21.1`            | Node.js 版本标识                                                                         |
+| `tlsBackend`                | string  | `rustls`             | TLS 后端：`rustls` 或 `native-tls`                                                       |
+| `countTokensApiUrl`         | string  | -                    | 外部 count_tokens API 地址                                                               |
+| `countTokensApiKey`         | string  | -                    | 外部 count_tokens API 密钥                                                               |
+| `countTokensAuthType`       | string  | `x-api-key`          | 外部 API 认证类型：`x-api-key` 或 `bearer`                                               |
+| `proxyUrl`                  | string  | -                    | HTTP/SOCKS5 代理地址                                                                     |
+| `proxyUsername`             | string  | -                    | 代理用户名                                                                               |
+| `proxyPassword`             | string  | -                    | 代理密码                                                                                 |
+| `adminApiKey`               | string  | -                    | Admin API 密钥，配置后启用凭据管理 API 和 Web 管理界面                                   |
+| `loadBalancingMode`         | string  | `priority`           | 负载均衡模式：`priority`（按优先级）或 `balanced`（均衡分配）                            |
+| `extractThinking`           | boolean | `true`               | 非流式响应的 thinking 块提取。启用后 `<thinking>` 标签会被解析为独立的 `thinking` 内容块 |
+| `defaultEndpoint`           | string  | `ide`                | 默认 Kiro 端点。凭据未显式指定 `endpoint` 时使用。当前支持：`ide`                        |
+| `dbPath`                    | string  | `./conversations.db` | 对话记录数据库文件路径                                                                   |
+| `keywordReplacements`       | array   | -                    | 关键词替换规则列表，每条规则包含 `id`、`pattern`、`replacement`、`isRegex` 字段          |
+| `keywordReplacementEnabled` | boolean | `false`              | 关键词替换功能全局开关                                                                   |
 
 完整配置示例：
 
 ```json
 {
-   "host": "127.0.0.1",
-   "port": 8990,
-   "apiKey": "sk-kiro-rs-qazWSXedcRFV123456",
-   "region": "us-east-1",
-   "tlsBackend": "rustls",
-   "kiroVersion": "0.9.2",
-   "machineId": "64位十六进制机器码",
-   "systemVersion": "darwin#24.6.0",
-   "nodeVersion": "22.21.1",
-   "authRegion": "us-east-1",
-   "apiRegion": "us-east-1",
-   "countTokensApiUrl": "https://api.example.com/v1/messages/count_tokens",
-   "countTokensApiKey": "sk-your-count-tokens-api-key",
-   "countTokensAuthType": "x-api-key",
-   "proxyUrl": "http://127.0.0.1:7890",
-   "proxyUsername": "user",
-   "proxyPassword": "pass",
-   "adminApiKey": "sk-admin-your-secret-key",
-   "loadBalancingMode": "priority",
-   "extractThinking": true
+    "host": "127.0.0.1",
+    "port": 8990,
+    "apiKey": "sk-kiro-rs-qazWSXedcRFV123456",
+    "region": "us-east-1",
+    "tlsBackend": "rustls",
+    "kiroVersion": "0.9.2",
+    "machineId": "64位十六进制机器码",
+    "systemVersion": "darwin#24.6.0",
+    "nodeVersion": "22.21.1",
+    "authRegion": "us-east-1",
+    "apiRegion": "us-east-1",
+    "countTokensApiUrl": "https://api.example.com/v1/messages/count_tokens",
+    "countTokensApiKey": "sk-your-count-tokens-api-key",
+    "countTokensAuthType": "x-api-key",
+    "proxyUrl": "http://127.0.0.1:7890",
+    "proxyUsername": "user",
+    "proxyPassword": "pass",
+    "adminApiKey": "sk-admin-your-secret-key",
+    "loadBalancingMode": "priority",
+    "extractThinking": true,
+    "dbPath": "./conversations.db",
+    "keywordReplacements": [
+        {
+            "id": "9bc6201e-e48d-493e-a595-babdb8d0ac23",
+            "pattern": "Cursor",
+            "replacement": "Kiro",
+            "isRegex": false
+        },
+        {
+            "id": "079b517c-fdcf-4f43-ae4a-22867f7a5e47",
+            "pattern": "中文",
+            "replacement": "英文",
+            "isRegex": false
+        }
+    ],
+    "keywordReplacementEnabled": true
 }
 ```
 
@@ -226,28 +243,29 @@ docker-compose up
 
 #### 字段说明
 
-| 字段             | 类型     | 描述                                          |
-|----------------|--------|---------------------------------------------|
-| `id`           | number | 凭据唯一 ID（可选，仅用于 Admin API 管理；手写文件可不填）        |
-| `accessToken`  | string | OAuth 访问令牌（可选，可自动刷新）                        |
-| `refreshToken` | string | OAuth 刷新令牌                                  |
-| `profileArn`   | string | AWS Profile ARN（可选，登录时返回）                   |
-| `expiresAt`    | string | Token 过期时间 (RFC3339)                        |
-| `authMethod`   | string | 认证方式：`social` 或 `idc`                       |
-| `clientId`     | string | IdC 登录的客户端 ID（IdC 认证必填）                     |
-| `clientSecret` | string | IdC 登录的客户端密钥（IdC 认证必填）                      |
-| `priority`     | number | 凭据优先级，数字越小越优先，默认为 0                         |
-| `region`       | string | 凭据级 Auth Region, 兼容字段                       |
-| `authRegion`   | string | 凭据级 Auth Region，用于 Token 刷新, 未配置时回退到 region |
-| `apiRegion`    | string | 凭据级 API Region，用于 API 请求                    |
-| `machineId`    | string | 凭据级机器码（64位十六进制）                             |
-| `email`        | string | 用户邮箱（可选，从 API 获取）                           |
-| `proxyUrl`     | string | 凭据级代理 URL（可选，特殊值 `direct` 表示不使用代理）       |
-| `proxyUsername`| string | 凭据级代理用户名（可选）                                |
-| `proxyPassword`| string | 凭据级代理密码（可选）                                 |
-| `endpoint`     | string | 凭据级端点名称（可选，未配置时使用 `config.defaultEndpoint`）|
+| 字段            | 类型   | 描述                                                          |
+| --------------- | ------ | ------------------------------------------------------------- |
+| `id`            | number | 凭据唯一 ID（可选，仅用于 Admin API 管理；手写文件可不填）    |
+| `accessToken`   | string | OAuth 访问令牌（可选，可自动刷新）                            |
+| `refreshToken`  | string | OAuth 刷新令牌                                                |
+| `profileArn`    | string | AWS Profile ARN（可选，登录时返回）                           |
+| `expiresAt`     | string | Token 过期时间 (RFC3339)                                      |
+| `authMethod`    | string | 认证方式：`social` 或 `idc`                                   |
+| `clientId`      | string | IdC 登录的客户端 ID（IdC 认证必填）                           |
+| `clientSecret`  | string | IdC 登录的客户端密钥（IdC 认证必填）                          |
+| `priority`      | number | 凭据优先级，数字越小越优先，默认为 0                          |
+| `region`        | string | 凭据级 Auth Region, 兼容字段                                  |
+| `authRegion`    | string | 凭据级 Auth Region，用于 Token 刷新, 未配置时回退到 region    |
+| `apiRegion`     | string | 凭据级 API Region，用于 API 请求                              |
+| `machineId`     | string | 凭据级机器码（64位十六进制）                                  |
+| `email`         | string | 用户邮箱（可选，从 API 获取）                                 |
+| `proxyUrl`      | string | 凭据级代理 URL（可选，特殊值 `direct` 表示不使用代理）        |
+| `proxyUsername` | string | 凭据级代理用户名（可选）                                      |
+| `proxyPassword` | string | 凭据级代理密码（可选）                                        |
+| `endpoint`      | string | 凭据级端点名称（可选，未配置时使用 `config.defaultEndpoint`） |
 
 说明：
+
 - IdC / Builder-ID / IAM 在本项目里属于同一种登录方式，配置时统一使用 `authMethod: "idc"`
 - 为兼容旧配置，`builder-id` / `iam` 仍可被识别，但会按 `idc` 处理
 
@@ -255,13 +273,13 @@ docker-compose up
 
 ```json
 {
-   "accessToken": "请求token，一般有效期一小时，可选",
-   "refreshToken": "刷新token，一般有效期7-30天不等",
-   "profileArn": "arn:aws:codewhisperer:us-east-1:111112222233:profile/QWER1QAZSDFGH",
-   "expiresAt": "2025-12-31T02:32:45.144Z",
-   "authMethod": "social",
-   "clientId": "IdC 登录需要",
-   "clientSecret": "IdC 登录需要"
+    "accessToken": "请求token，一般有效期一小时，可选",
+    "refreshToken": "刷新token，一般有效期7-30天不等",
+    "profileArn": "arn:aws:codewhisperer:us-east-1:111112222233:profile/QWER1QAZSDFGH",
+    "expiresAt": "2025-12-31T02:32:45.144Z",
+    "authMethod": "social",
+    "clientId": "IdC 登录需要",
+    "clientSecret": "IdC 登录需要"
 }
 ```
 
@@ -269,35 +287,36 @@ docker-compose up
 
 ```json
 [
-   {
-      "refreshToken": "第一个凭据的刷新token",
-      "expiresAt": "2025-12-31T02:32:45.144Z",
-      "authMethod": "social",
-      "priority": 0
-   },
-   {
-      "refreshToken": "第二个凭据的刷新token",
-      "expiresAt": "2025-12-31T02:32:45.144Z",
-      "authMethod": "idc",
-      "clientId": "xxxxxxxxx",
-      "clientSecret": "xxxxxxxxx",
-      "region": "us-east-2",
-      "priority": 1,
-      "proxyUrl": "socks5://proxy.example.com:1080",
-      "proxyUsername": "user",
-      "proxyPassword": "pass"
-   },
-   {
-      "refreshToken": "第三个凭据（显式不走代理）",
-      "expiresAt": "2025-12-31T02:32:45.144Z",
-      "authMethod": "social",
-      "priority": 2,
-      "proxyUrl": "direct"
-   }
+    {
+        "refreshToken": "第一个凭据的刷新token",
+        "expiresAt": "2025-12-31T02:32:45.144Z",
+        "authMethod": "social",
+        "priority": 0
+    },
+    {
+        "refreshToken": "第二个凭据的刷新token",
+        "expiresAt": "2025-12-31T02:32:45.144Z",
+        "authMethod": "idc",
+        "clientId": "xxxxxxxxx",
+        "clientSecret": "xxxxxxxxx",
+        "region": "us-east-2",
+        "priority": 1,
+        "proxyUrl": "socks5://proxy.example.com:1080",
+        "proxyUsername": "user",
+        "proxyPassword": "pass"
+    },
+    {
+        "refreshToken": "第三个凭据（显式不走代理）",
+        "expiresAt": "2025-12-31T02:32:45.144Z",
+        "authMethod": "social",
+        "priority": 2,
+        "proxyUrl": "direct"
+    }
 ]
 ```
 
 多凭据特性：
+
 - 按 `priority` 字段排序，数字越小优先级越高（默认为 0）
 - 单凭据最多重试 3 次，单请求最多重试 9 次
 - 自动故障转移到下一个可用凭据
@@ -319,32 +338,32 @@ docker-compose up
 
 **代理优先级**：`凭据.proxyUrl` > `config.proxyUrl` > 无代理
 
-| 凭据 `proxyUrl` 值 | 行为 |
-|---|---|
-| 具体 URL（如 `http://proxy:8080`、`socks5://proxy:1080`） | 使用凭据指定的代理 |
-| `direct` | 显式不使用代理（即使全局配置了代理） |
-| 未配置（留空） | 回退到全局代理配置 |
+| 凭据 `proxyUrl` 值                                        | 行为                                 |
+| --------------------------------------------------------- | ------------------------------------ |
+| 具体 URL（如 `http://proxy:8080`、`socks5://proxy:1080`） | 使用凭据指定的代理                   |
+| `direct`                                                  | 显式不使用代理（即使全局配置了代理） |
+| 未配置（留空）                                            | 回退到全局代理配置                   |
 
 凭据级代理示例：
 
 ```json
 [
-   {
-      "refreshToken": "凭据A：使用自己的代理",
-      "authMethod": "social",
-      "proxyUrl": "socks5://proxy-a.example.com:1080",
-      "proxyUsername": "user_a",
-      "proxyPassword": "pass_a"
-   },
-   {
-      "refreshToken": "凭据B：显式不走代理（直连）",
-      "authMethod": "social",
-      "proxyUrl": "direct"
-   },
-   {
-      "refreshToken": "凭据C：使用全局代理（或直连，取决于 config.json）",
-      "authMethod": "social"
-   }
+    {
+        "refreshToken": "凭据A：使用自己的代理",
+        "authMethod": "social",
+        "proxyUrl": "socks5://proxy-a.example.com:1080",
+        "proxyUsername": "user_a",
+        "proxyPassword": "pass_a"
+    },
+    {
+        "refreshToken": "凭据B：显式不走代理（直连）",
+        "authMethod": "social",
+        "proxyUrl": "direct"
+    },
+    {
+        "refreshToken": "凭据C：使用全局代理（或直连，取决于 config.json）",
+        "authMethod": "social"
+    }
 ]
 ```
 
@@ -353,14 +372,15 @@ docker-compose up
 客户端请求本服务时，支持两种认证方式：
 
 1. **x-api-key Header**
-   ```
-   x-api-key: sk-your-api-key
-   ```
+
+    ```
+    x-api-key: sk-your-api-key
+    ```
 
 2. **Authorization Bearer**
-   ```
-   Authorization: Bearer sk-your-api-key
-   ```
+    ```
+    Authorization: Bearer sk-your-api-key
+    ```
 
 ### 环境变量
 
@@ -374,20 +394,21 @@ RUST_LOG=debug ./target/release/kiro-rs
 
 ### 标准端点 (/v1)
 
-| 端点 | 方法 | 描述 |
-|------|------|------|
-| `/v1/models` | GET | 获取可用模型列表 |
-| `/v1/messages` | POST | 创建消息（对话） |
-| `/v1/messages/count_tokens` | POST | 估算 Token 数量 |
+| 端点                        | 方法 | 描述             |
+| --------------------------- | ---- | ---------------- |
+| `/v1/models`                | GET  | 获取可用模型列表 |
+| `/v1/messages`              | POST | 创建消息（对话） |
+| `/v1/messages/count_tokens` | POST | 估算 Token 数量  |
 
 ### Claude Code 兼容端点 (/cc/v1)
 
-| 端点 | 方法 | 描述 |
-|------|------|------|
-| `/cc/v1/messages` | POST | 创建消息（缓冲模式，确保 `input_tokens` 准确） |
-| `/cc/v1/messages/count_tokens` | POST | 估算 Token 数量（与 `/v1` 相同） |
+| 端点                           | 方法 | 描述                                           |
+| ------------------------------ | ---- | ---------------------------------------------- |
+| `/cc/v1/messages`              | POST | 创建消息（缓冲模式，确保 `input_tokens` 准确） |
+| `/cc/v1/messages/count_tokens` | POST | 估算 Token 数量（与 `/v1` 相同）               |
 
 > **`/cc/v1/messages` 与 `/v1/messages` 的区别**：
+>
 > - `/v1/messages`：实时流式返回，`message_start` 中的 `input_tokens` 是估算值
 > - `/cc/v1/messages`：缓冲模式，等待上游流完成后，用从 `contextUsageEvent` 计算的准确 `input_tokens` 更正 `message_start`，然后一次性返回所有事件
 > - 等待期间会每 25 秒发送 `ping` 事件保活
@@ -435,28 +456,28 @@ RUST_LOG=debug ./target/release/kiro-rs
 
 ## 模型映射
 
-| Anthropic 模型 | Kiro 模型 |
-|----------------|-----------|
-| `*sonnet*` | `claude-sonnet-4.5` |
-| `*opus*`（含 4.5/4-5） | `claude-opus-4.5` |
-| `*opus*`（其他） | `claude-opus-4.6` |
-| `*haiku*` | `claude-haiku-4.5` |
+| Anthropic 模型         | Kiro 模型           |
+| ---------------------- | ------------------- |
+| `*sonnet*`             | `claude-sonnet-4.5` |
+| `*opus*`（含 4.5/4-5） | `claude-opus-4.5`   |
+| `*opus*`（其他）       | `claude-opus-4.6`   |
+| `*haiku*`              | `claude-haiku-4.5`  |
 
 ## Admin（可选）
 
 当 `config.json` 配置了非空 `adminApiKey` 时，会启用：
 
 - **Admin API（认证同 API Key）**
-  - `GET /api/admin/credentials` - 获取所有凭据状态
-  - `POST /api/admin/credentials` - 添加新凭据
-  - `DELETE /api/admin/credentials/:id` - 删除凭据
-  - `POST /api/admin/credentials/:id/disabled` - 设置凭据禁用状态
-  - `POST /api/admin/credentials/:id/priority` - 设置凭据优先级
-  - `POST /api/admin/credentials/:id/reset` - 重置失败计数
-  - `GET /api/admin/credentials/:id/balance` - 获取凭据余额
+    - `GET /api/admin/credentials` - 获取所有凭据状态
+    - `POST /api/admin/credentials` - 添加新凭据
+    - `DELETE /api/admin/credentials/:id` - 删除凭据
+    - `POST /api/admin/credentials/:id/disabled` - 设置凭据禁用状态
+    - `POST /api/admin/credentials/:id/priority` - 设置凭据优先级
+    - `POST /api/admin/credentials/:id/reset` - 重置失败计数
+    - `GET /api/admin/credentials/:id/balance` - 获取凭据余额
 
 - **Admin UI**
-  - `GET /admin` - 访问管理页面（需要在编译前构建 `admin-ui/dist`）
+    - `GET /admin` - 访问管理页面（需要在编译前构建 `admin-ui/dist`）
 
 ## 注意事项
 
@@ -536,8 +557,9 @@ MIT
 
 ## 致谢
 
-本项目的实现离不开前辈的努力:  
- - [kiro2api](https://github.com/caidaoli/kiro2api)
- - [proxycast](https://github.com/aiclientproxy/proxycast)
+本项目的实现离不开前辈的努力:
+
+- [kiro2api](https://github.com/caidaoli/kiro2api)
+- [proxycast](https://github.com/aiclientproxy/proxycast)
 
 本项目部分逻辑参考了以上的项目, 再次由衷的感谢!
