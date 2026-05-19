@@ -8,9 +8,6 @@
 use reqwest::Client;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::sleep;
-
 use crate::http_client::{ProxyConfig, build_client};
 use crate::kiro::endpoint::{KiroEndpoint, RequestContext};
 use crate::kiro::machine_id;
@@ -154,9 +151,10 @@ impl KiroProvider {
             let endpoint = match self.endpoint_for(&ctx.credentials) {
                 Ok(e) => e,
                 Err(e) => {
-                    last_error = Some(e);
-                    // endpoint 解析失败：记为失败，换下一张凭据
-                    self.token_manager.report_failure(ctx.id);
+                    last_error = Some(Self::mcp_err_msg(ctx.id, ctx.credentials.email.as_deref(), e));
+                    if !self.token_manager.switch_to_next() {
+                        break;
+                    }
                     continue;
                 }
             };
@@ -183,14 +181,17 @@ impl KiroProvider {
                 Ok(resp) => resp,
                 Err(e) => {
                     tracing::warn!(
-                        "MCP 请求发送失败（尝试 {}/{}）: {}",
+                        "MCP 请求发送失败（凭据 #{}，尝试 {}/{}）: {}",
+                        ctx.id,
                         attempt + 1,
                         max_retries,
                         e
                     );
-                    last_error = Some(e.into());
-                    if attempt + 1 < max_retries {
-                        sleep(Self::retry_delay(attempt)).await;
+                    self.token_manager
+                        .report_api_error(ctx.id, 0, &e.to_string());
+                    last_error = Some(Self::mcp_err_msg(ctx.id, ctx.credentials.email.as_deref(), e));
+                    if !self.token_manager.switch_to_next() {
+                        break;
                     }
                     continue;
                 }
@@ -204,70 +205,44 @@ impl KiroProvider {
                 return Ok(response);
             }
 
-            // 失败响应
             let body = response.text().await.unwrap_or_default();
 
-            // 402 额度用尽
             if status.as_u16() == 402 && endpoint.is_monthly_request_limit(&body) {
                 let has_available = self.token_manager.report_quota_exhausted(ctx.id);
                 if !has_available {
-                    anyhow::bail!("MCP 请求失败（所有凭据已用尽）: {} {}", status, body);
+                    anyhow::bail!(
+                        "MCP 请求失败（所有凭据已用尽，{}）: {} {}",
+                        Self::cred_label(ctx.id, ctx.credentials.email.as_deref()),
+                        status,
+                        body
+                    );
                 }
-                last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
+                last_error = Some(Self::mcp_err(ctx.id, ctx.credentials.email.as_deref(), status, &body));
                 continue;
             }
 
-            // 400 Bad Request
-            if status.as_u16() == 400 {
-                anyhow::bail!("MCP 请求失败: {} {}", status, body);
-            }
-
-            // 401/403 凭据问题
-            if matches!(status.as_u16(), 401 | 403) {
-                // token 被上游失效：先尝试 force-refresh，每凭据仅一次机会
-                if endpoint.is_bearer_token_invalid(&body) && !force_refreshed.contains(&ctx.id) {
-                    force_refreshed.insert(ctx.id);
-                    tracing::info!("凭据 #{} token 疑似被上游失效，尝试强制刷新", ctx.id);
-                    if self.token_manager.force_refresh_token_for(ctx.id).await.is_ok() {
-                        tracing::info!("凭据 #{} token 强制刷新成功，重试请求", ctx.id);
-                        continue;
-                    }
-                    tracing::warn!("凭据 #{} token 强制刷新失败，计入失败", ctx.id);
+            if matches!(status.as_u16(), 401 | 403)
+                && endpoint.is_bearer_token_invalid(&body)
+                && !force_refreshed.contains(&ctx.id)
+            {
+                force_refreshed.insert(ctx.id);
+                tracing::info!("凭据 #{} token 疑似被上游失效，尝试强制刷新", ctx.id);
+                if self.token_manager.force_refresh_token_for(ctx.id).await.is_ok() {
+                    tracing::info!("凭据 #{} token 强制刷新成功，重试请求", ctx.id);
+                    continue;
                 }
-
-                let has_available = self.token_manager.report_failure(ctx.id);
-                if !has_available {
-                    anyhow::bail!("MCP 请求失败（所有凭据已用尽）: {} {}", status, body);
-                }
-                last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
-                continue;
             }
 
-            // 瞬态错误
-            if matches!(status.as_u16(), 408 | 429) || status.is_server_error() {
-                tracing::warn!(
-                    "MCP 请求失败（上游瞬态错误，尝试 {}/{}）: {} {}",
-                    attempt + 1,
-                    max_retries,
-                    status,
-                    body
-                );
-                last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
-                if attempt + 1 < max_retries {
-                    sleep(Self::retry_delay(attempt)).await;
-                }
-                continue;
-            }
-
-            // 其他 4xx
-            if status.is_client_error() {
-                anyhow::bail!("MCP 请求失败: {} {}", status, body);
-            }
-
-            // 兜底
-            last_error = Some(anyhow::anyhow!("MCP 请求失败: {} {}", status, body));
-            if attempt + 1 < max_retries {
-                sleep(Self::retry_delay(attempt)).await;
+            let (err, can_retry) = Self::mcp_fail_switch(
+                &self.token_manager,
+                ctx.id,
+                ctx.credentials.email.as_deref(),
+                status,
+                &body,
+            );
+            last_error = Some(err);
+            if !can_retry {
+                break;
             }
         }
 
@@ -313,8 +288,15 @@ impl KiroProvider {
             let endpoint = match self.endpoint_for(&ctx.credentials) {
                 Ok(e) => e,
                 Err(e) => {
-                    last_error = Some(e);
-                    self.token_manager.report_failure(ctx.id);
+                    last_error = Some(Self::api_err_msg(
+                        api_type,
+                        ctx.id,
+                        ctx.credentials.email.as_deref(),
+                        e,
+                    ));
+                    if !self.token_manager.switch_to_next() {
+                        break;
+                    }
                     continue;
                 }
             };
@@ -341,16 +323,22 @@ impl KiroProvider {
                 Ok(resp) => resp,
                 Err(e) => {
                     tracing::warn!(
-                        "API 请求发送失败（尝试 {}/{}）: {}",
+                        "API 请求发送失败（凭据 #{}，尝试 {}/{}）: {}",
+                        ctx.id,
                         attempt + 1,
                         max_retries,
                         e
                     );
-                    // 网络错误通常是上游/链路瞬态问题，不应导致"禁用凭据"或"切换凭据"
-                    // （否则一段时间网络抖动会把所有凭据都误禁用，需要重启才能恢复）
-                    last_error = Some(e.into());
-                    if attempt + 1 < max_retries {
-                        sleep(Self::retry_delay(attempt)).await;
+                    self.token_manager
+                        .report_api_error(ctx.id, 0, &e.to_string());
+                    last_error = Some(Self::api_err_msg(
+                        api_type,
+                        ctx.id,
+                        ctx.credentials.email.as_deref(),
+                        e,
+                    ));
+                    if !self.token_manager.switch_to_next() {
+                        break;
                     }
                     continue;
                 }
@@ -364,13 +352,12 @@ impl KiroProvider {
                 return Ok(response);
             }
 
-            // 失败响应：读取 body 用于日志/错误信息
             let body = response.text().await.unwrap_or_default();
 
-            // 402 Payment Required 且额度用尽：禁用凭据并故障转移
             if status.as_u16() == 402 && endpoint.is_monthly_request_limit(&body) {
                 tracing::warn!(
-                    "API 请求失败（额度已用尽，禁用凭据并切换，尝试 {}/{}）: {} {}",
+                    "API 请求失败（额度已用尽，凭据 #{}，尝试 {}/{}）: {} {}",
+                    ctx.id,
                     attempt + 1,
                     max_retries,
                     status,
@@ -380,110 +367,47 @@ impl KiroProvider {
                 let has_available = self.token_manager.report_quota_exhausted(ctx.id);
                 if !has_available {
                     anyhow::bail!(
-                        "{} API 请求失败（所有凭据已用尽）: {} {}",
+                        "{} API 请求失败（所有凭据已用尽，{}）: {} {}",
                         api_type,
+                        Self::cred_label(ctx.id, ctx.credentials.email.as_deref()),
                         status,
                         body
                     );
                 }
 
-                last_error = Some(anyhow::anyhow!(
-                    "{} API 请求失败: {} {}",
+                last_error = Some(Self::api_err(
                     api_type,
+                    ctx.id,
+                    ctx.credentials.email.as_deref(),
                     status,
-                    body
+                    &body,
                 ));
                 continue;
             }
 
-            // 400 Bad Request - 请求问题，重试/切换凭据无意义
-            if status.as_u16() == 400 {
-                anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
-            }
-
-            // 401/403 - 更可能是凭据/权限问题：计入失败并允许故障转移
-            if matches!(status.as_u16(), 401 | 403) {
-                tracing::warn!(
-                    "API 请求失败（可能为凭据错误，尝试 {}/{}）: {} {}",
-                    attempt + 1,
-                    max_retries,
-                    status,
-                    body
-                );
-
-                // token 被上游失效：先尝试 force-refresh，每凭据仅一次机会
-                if endpoint.is_bearer_token_invalid(&body) && !force_refreshed.contains(&ctx.id) {
-                    force_refreshed.insert(ctx.id);
-                    tracing::info!("凭据 #{} token 疑似被上游失效，尝试强制刷新", ctx.id);
-                    if self.token_manager.force_refresh_token_for(ctx.id).await.is_ok() {
-                        tracing::info!("凭据 #{} token 强制刷新成功，重试请求", ctx.id);
-                        continue;
-                    }
-                    tracing::warn!("凭据 #{} token 强制刷新失败，计入失败", ctx.id);
+            if matches!(status.as_u16(), 401 | 403)
+                && endpoint.is_bearer_token_invalid(&body)
+                && !force_refreshed.contains(&ctx.id)
+            {
+                force_refreshed.insert(ctx.id);
+                tracing::info!("凭据 #{} token 疑似被上游失效，尝试强制刷新", ctx.id);
+                if self.token_manager.force_refresh_token_for(ctx.id).await.is_ok() {
+                    tracing::info!("凭据 #{} token 强制刷新成功，重试请求", ctx.id);
+                    continue;
                 }
-
-                let has_available = self.token_manager.report_failure(ctx.id);
-                if !has_available {
-                    anyhow::bail!(
-                        "{} API 请求失败（所有凭据已用尽）: {} {}",
-                        api_type,
-                        status,
-                        body
-                    );
-                }
-
-                last_error = Some(anyhow::anyhow!(
-                    "{} API 请求失败: {} {}",
-                    api_type,
-                    status,
-                    body
-                ));
-                continue;
             }
 
-            // 429/408/5xx - 瞬态上游错误：重试但不禁用或切换凭据
-            // （避免 429 high traffic / 502 high load 等瞬态错误把所有凭据锁死）
-            if matches!(status.as_u16(), 408 | 429) || status.is_server_error() {
-                tracing::warn!(
-                    "API 请求失败（上游瞬态错误，尝试 {}/{}）: {} {}",
-                    attempt + 1,
-                    max_retries,
-                    status,
-                    body
-                );
-                last_error = Some(anyhow::anyhow!(
-                    "{} API 请求失败: {} {}",
-                    api_type,
-                    status,
-                    body
-                ));
-                if attempt + 1 < max_retries {
-                    sleep(Self::retry_delay(attempt)).await;
-                }
-                continue;
-            }
-
-            // 其他 4xx - 通常为请求/配置问题：直接返回，不计入凭据失败
-            if status.is_client_error() {
-                anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
-            }
-
-            // 兜底：当作可重试的瞬态错误处理（不切换凭据）
-            tracing::warn!(
-                "API 请求失败（未知错误，尝试 {}/{}）: {} {}",
-                attempt + 1,
-                max_retries,
-                status,
-                body
-            );
-            last_error = Some(anyhow::anyhow!(
-                "{} API 请求失败: {} {}",
+            let (err, can_retry) = Self::api_fail_switch(
+                &self.token_manager,
                 api_type,
+                ctx.id,
+                ctx.credentials.email.as_deref(),
                 status,
-                body
-            ));
-            if attempt + 1 < max_retries {
-                sleep(Self::retry_delay(attempt)).await;
+                &body,
+            );
+            last_error = Some(err);
+            if !can_retry {
+                break;
             }
         }
 
@@ -513,14 +437,104 @@ impl KiroProvider {
             .map(|s| s.to_string())
     }
 
-    fn retry_delay(attempt: usize) -> Duration {
-        // 指数退避 + 少量抖动，避免上游抖动时放大故障
-        const BASE_MS: u64 = 200;
-        const MAX_MS: u64 = 2_000;
-        let exp = BASE_MS.saturating_mul(2u64.saturating_pow(attempt.min(6) as u32));
-        let backoff = exp.min(MAX_MS);
-        let jitter_max = (backoff / 4).max(1);
-        let jitter = fastrand::u64(0..=jitter_max);
-        Duration::from_millis(backoff.saturating_add(jitter))
+    fn cred_label(cred_id: u64, email: Option<&str>) -> String {
+        match email.filter(|s| !s.is_empty()) {
+            Some(e) => format!("凭据 #{} ({})", cred_id, e),
+            None => format!("凭据 #{}", cred_id),
+        }
+    }
+
+    fn api_err(
+        api_type: &str,
+        cred_id: u64,
+        email: Option<&str>,
+        status: reqwest::StatusCode,
+        body: &str,
+    ) -> anyhow::Error {
+        anyhow::anyhow!(
+            "{} API 请求失败（{}）: {} {}",
+            api_type,
+            Self::cred_label(cred_id, email),
+            status,
+            body
+        )
+    }
+
+    fn api_err_msg(
+        api_type: &str,
+        cred_id: u64,
+        email: Option<&str>,
+        err: impl std::fmt::Display,
+    ) -> anyhow::Error {
+        anyhow::anyhow!(
+            "{} API 请求失败（{}）: {}",
+            api_type,
+            Self::cred_label(cred_id, email),
+            err
+        )
+    }
+
+    fn mcp_err(
+        cred_id: u64,
+        email: Option<&str>,
+        status: reqwest::StatusCode,
+        body: &str,
+    ) -> anyhow::Error {
+        anyhow::anyhow!(
+            "MCP 请求失败（{}）: {} {}",
+            Self::cred_label(cred_id, email),
+            status,
+            body
+        )
+    }
+
+    fn mcp_err_msg(
+        cred_id: u64,
+        email: Option<&str>,
+        err: impl std::fmt::Display,
+    ) -> anyhow::Error {
+        anyhow::anyhow!(
+            "MCP 请求失败（{}）: {}",
+            Self::cred_label(cred_id, email),
+            err
+        )
+    }
+
+    fn api_fail_switch(
+        token_manager: &MultiTokenManager,
+        api_type: &str,
+        cred_id: u64,
+        email: Option<&str>,
+        status: reqwest::StatusCode,
+        body: &str,
+    ) -> (anyhow::Error, bool) {
+        token_manager.report_api_error(cred_id, status.as_u16(), body);
+        tracing::warn!(
+            "{} API 请求失败（{}）: {} {}",
+            api_type,
+            Self::cred_label(cred_id, email),
+            status,
+            body
+        );
+        let err = Self::api_err(api_type, cred_id, email, status, body);
+        (err, token_manager.switch_to_next())
+    }
+
+    fn mcp_fail_switch(
+        token_manager: &MultiTokenManager,
+        cred_id: u64,
+        email: Option<&str>,
+        status: reqwest::StatusCode,
+        body: &str,
+    ) -> (anyhow::Error, bool) {
+        token_manager.report_api_error(cred_id, status.as_u16(), body);
+        tracing::warn!(
+            "MCP 请求失败（{}）: {} {}",
+            Self::cred_label(cred_id, email),
+            status,
+            body
+        );
+        let err = Self::mcp_err(cred_id, email, status, body);
+        (err, token_manager.switch_to_next())
     }
 }
