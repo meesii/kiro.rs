@@ -28,6 +28,7 @@ type RawConversationRow = ConversationRow & {
     created_at?: string;
     system_prompt?: string | null;
     request_messages?: string;
+    request_tools?: string | null;
     response_content?: string;
     input_tokens?: number;
     output_tokens?: number;
@@ -48,6 +49,7 @@ function normalize_conversation_row(raw: RawConversationRow): ConversationRow {
         endpoint: raw.endpoint,
         systemPrompt: raw.systemPrompt ?? raw.system_prompt ?? null,
         requestMessages: raw.requestMessages ?? raw.request_messages ?? '',
+        requestTools: raw.requestTools ?? raw.request_tools ?? null,
         responseContent: raw.responseContent ?? raw.response_content ?? '',
         inputTokens: raw.inputTokens ?? raw.input_tokens ?? 0,
         outputTokens: raw.outputTokens ?? raw.output_tokens ?? 0,

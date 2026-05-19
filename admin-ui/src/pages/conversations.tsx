@@ -19,6 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { use_conversation_models, use_conversations } from '@/hooks/use-api';
+import { cn } from '@/lib/utils';
 import type { ConversationQuery, ConversationRow } from '@/types/api';
 import dayjs from 'dayjs';
 import { ArrowUpDown, Clock, Loader2, MessageSquare, RefreshCw, Search, X } from 'lucide-react';
@@ -63,6 +64,8 @@ const fmt = {
 /**
  * 消息解析
  */
+const LIST_PREVIEW_LEN = 500;
+
 const msg = {
     extract_content(content: unknown): string {
         if (typeof content === 'string') return content;
@@ -70,22 +73,30 @@ const msg = {
             return content
                 .map((block) => {
                     if (typeof block === 'string') return block;
-                    if (block && typeof block === 'object' && 'text' in block) {
-                        return String((block as { text: unknown }).text);
+                    if (block && typeof block === 'object') {
+                        return JSON.stringify(block, null, 2);
                     }
-                    return JSON.stringify(block);
+                    return String(block);
                 })
-                .join('\n');
+                .join('\n\n');
         }
-        if (content != null) return JSON.stringify(content);
+        if (content != null) return JSON.stringify(content, null, 2);
         return '';
+    },
+    format_json_text(raw: string | null | undefined): string {
+        if (!raw) return '';
+        try {
+            return JSON.stringify(JSON.parse(raw), null, 2);
+        } catch {
+            return raw;
+        }
     },
     extract_user_input(raw: string | undefined): string {
         const parsed = msg.parse(raw);
         const user_msg = parsed.filter((m) => m.role === 'user').at(-1);
         if (!user_msg) return '—';
         const text = user_msg.content;
-        return text.length > 60 ? text.slice(0, 60) + '…' : text;
+        return text.length > LIST_PREVIEW_LEN ? text.slice(0, LIST_PREVIEW_LEN) + '…' : text;
     },
     parse(raw: string | undefined): ParsedMessage[] {
         if (!raw) return [];
@@ -387,23 +398,41 @@ function StopReasonBadge({ reason }: { reason: string }) {
     );
 }
 
+/**
+ * 详情只读文本区：完整内容，由外层 flex + max-h-0 限制高度并内部滚动
+ */
+function DetailTextarea({ value, box_class }: { value: string; box_class?: string }) {
+    return (
+        <div className={cn('flex min-h-0 flex-col', box_class)}>
+            <Textarea
+                readOnly
+                value={value}
+                className="max-h-0 min-h-40 flex-1 resize-none overflow-auto field-sizing-fixed text-[12px] md:text-[12px] bg-muted/30 focus-visible:ring-0 focus-visible:border-input"
+            />
+        </div>
+    );
+}
+
 function ConversationDetailDialog({ conversation, on_open_change }: { conversation: ConversationRow | null; on_open_change: (open: boolean) => void }) {
     if (!conversation) return null;
 
     const messages = msg.parse(conversation.requestMessages);
+    const system_text = msg.format_json_text(conversation.systemPrompt);
+    const tools_text = msg.format_json_text(conversation.requestTools);
+    const response_text = msg.format_json_text(conversation.responseContent) || conversation.responseContent || '（空）';
 
     return (
         <Dialog open={!!conversation} onOpenChange={on_open_change}>
-            <DialogContent className="sm:max-w-3xl max-h-[85vh] flex flex-col">
-                <DialogHeader>
+            <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-3xl">
+                <DialogHeader className="shrink-0">
                     <DialogTitle className="flex items-center gap-2">
                         <MessageSquare className="size-4" />
                         对话详情
                     </DialogTitle>
                 </DialogHeader>
 
-                <div className="space-y-4 flex-1 min-h-0 overflow-hidden">
-                    <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+                    <div className="grid shrink-0 grid-cols-2 gap-3 text-sm sm:grid-cols-4">
                         <div>
                             <span className="text-muted-foreground">模型</span>
                             <p className=" text-xs mt-0.5">{conversation.model}</p>
@@ -440,49 +469,43 @@ function ConversationDetailDialog({ conversation, on_open_change }: { conversati
                         </div>
                     </div>
 
-                    {conversation.systemPrompt && (
+                    {system_text && (
                         <>
-                            <Separator />
-                            <div>
-                                <h4 className="text-sm font-medium mb-2">系统提示词</h4>
-                                <Textarea
-                                    className="max-h-0 min-h-16 resize-none text-[12px] md:text-[12px] bg-muted/30 focus-visible:ring-0 focus-visible:border-input"
-                                    readOnly
-                                    value={conversation.systemPrompt}
-                                />
+                            <Separator className="shrink-0" />
+                            <div className="flex shrink-0 flex-col gap-2">
+                                <h4 className="text-sm font-medium">系统提示词</h4>
+                                <DetailTextarea value={system_text} box_class="max-h-40" />
                             </div>
                         </>
                     )}
 
-                    <Separator />
+                    {tools_text && (
+                        <>
+                            <Separator className="shrink-0" />
+                            <div className="flex shrink-0 flex-col gap-2">
+                                <h4 className="text-sm font-medium">工具定义</h4>
+                                <DetailTextarea value={tools_text} box_class="max-h-40" />
+                            </div>
+                        </>
+                    )}
 
-                    <div>
-                        <h4 className="text-sm font-medium mb-2">请求消息</h4>
-                        <div className="space-y-2">
+                    <div className="flex min-h-0 max-h-80 shrink-0 flex-col gap-2 overflow-hidden">
+                        <h4 className="shrink-0 text-sm font-medium">请求消息</h4>
+                        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
                             {messages.map((m, i) => (
                                 <div key={i}>
                                     <Badge variant="outline" className="mb-1.5 text-xs uppercase">
                                         {m.role}
                                     </Badge>
-                                    <Textarea
-                                        className="max-h-0 min-h-16 resize-none text-[12px] md:text-[12px] bg-muted/30 focus-visible:ring-0 focus-visible:border-input"
-                                        readOnly
-                                        value={m.content.slice(0, 500) + (m.content.length > 500 ? '…' : '')}
-                                    />
+                                    <DetailTextarea value={m.content} box_class="max-h-32" />
                                 </div>
                             ))}
                         </div>
                     </div>
 
-                    <Separator />
-
-                    <div>
-                        <h4 className="text-sm font-medium mb-2">响应内容</h4>
-                        <Textarea
-                            className="max-h-0 min-h-30 resize-none text-[12px] md:text-[12px] bg-muted/30 focus-visible:ring-0 focus-visible:border-input"
-                            readOnly
-                            value={conversation.responseContent || '（空）'}
-                        />
+                    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+                        <h4 className="shrink-0 text-sm font-medium">响应内容</h4>
+                        <DetailTextarea value={response_text} box_class="flex-1 " />
                     </div>
                 </div>
             </DialogContent>

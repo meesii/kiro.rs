@@ -133,6 +133,7 @@ export interface ConversationRow {
     endpoint: string;
     systemPrompt: string | null;
     requestMessages: string;
+    requestTools: string | null;
     responseContent: string;
     inputTokens: number;
     outputTokens: number;
