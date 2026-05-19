@@ -163,6 +163,16 @@ docker-compose up
 
 需要将 `config.json` 和 `credentials.json` 挂载到容器中，具体参见 `docker-compose.yml`。
 
+Docker 构建并复制二进制文件到本地
+
+```
+docker create --name temp-kiro kiro-rs
+
+docker cp temp-kiro:/app/kiro-rs .\kiro-rs
+
+docker rm temp-kiro
+```
+
 ## 配置详解
 
 ### config.json
