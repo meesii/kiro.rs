@@ -166,6 +166,8 @@ docker-compose up
 Docker 构建并复制二进制文件到本地
 
 ```
+docker build -t kiro-rs .
+
 docker create --name temp-kiro kiro-rs
 
 docker cp temp-kiro:/app/kiro-rs .\kiro-rs
