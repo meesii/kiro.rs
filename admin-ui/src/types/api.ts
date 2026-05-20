@@ -130,6 +130,21 @@ export interface ConversationQuery {
     sortOrder?: string;
 }
 
+export interface ConversationListItem {
+    id: string;
+    createdAt: string;
+    model: string;
+    endpoint: string;
+    /** 截断后的请求消息预览（≤500 字符） */
+    requestMessagesPreview: string;
+    inputTokens: number;
+    outputTokens: number;
+    stopReason: string;
+    stream: boolean;
+    durationMs: number;
+}
+
+/** 对话完整详情（由详情接口返回） */
 export interface ConversationRow {
     id: string;
     createdAt: string;
@@ -147,7 +162,7 @@ export interface ConversationRow {
 }
 
 export interface ConversationPage {
-    items: ConversationRow[];
+    items: ConversationListItem[];
     total: number;
     page: number;
     pageSize: number;

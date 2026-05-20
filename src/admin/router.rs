@@ -9,7 +9,7 @@ use super::{
     handlers::{
         add_credential, add_keyword_replacement, delete_credential, delete_keyword_replacement,
         force_refresh_balance, force_refresh_token, get_admin_config, get_all_credentials,
-        get_conversation_models, get_conversation_stats, get_conversations,
+        get_conversation_detail, get_conversation_models, get_conversation_stats, get_conversations,
         get_credential_balance, get_keyword_replacements, reset_failure_count,
         set_credential_disabled, set_credential_email, set_credential_machine_id,
         set_credential_priority, set_credential_proxy,
@@ -36,7 +36,8 @@ use super::{
 /// - `POST /config/keyword-replacements` - 新增关键词替换
 /// - `PUT /config/keyword-replacements/:id` - 更新关键词替换
 /// - `DELETE /config/keyword-replacements/:id` - 删除关键词替换
-/// - `GET /conversations` - 分页查询对话记录
+/// - `GET /conversations` - 分页查询对话记录（轻量列表版）
+/// - `GET /conversations/:id` - 获取单条对话完整详情
 /// - `GET /conversations/stats` - 获取 Token 消耗统计（按小时聚合）
 /// - `GET /conversations/models` - 获取所有不重复的模型名称
 ///
@@ -65,6 +66,7 @@ pub fn create_admin_router(state: AdminState) -> Router {
             get(get_admin_config).put(update_admin_config),
         )
         .route("/conversations", get(get_conversations))
+        .route("/conversations/{id}", get(get_conversation_detail))
         .route("/conversations/stats", get(get_conversation_stats))
         .route("/conversations/models", get(get_conversation_models))
         .route(

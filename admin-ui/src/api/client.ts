@@ -5,6 +5,7 @@ import type {
     AddKeywordReplacementRequest,
     AdminConfigResponse,
     BalanceResponse,
+    ConversationListItem,
     ConversationModelsResponse,
     ConversationPage,
     ConversationQuery,
@@ -36,6 +37,16 @@ type RawConversationRow = ConversationRow & {
     duration_ms?: number;
 };
 
+type RawConversationListItem = ConversationListItem & {
+    created_at?: string;
+    request_messages_preview?: string;
+    request_messages?: string;
+    input_tokens?: number;
+    output_tokens?: number;
+    stop_reason?: string;
+    duration_ms?: number;
+};
+
 type RawConversationPage = ConversationPage & {
     page_size?: number;
     total_pages?: number;
@@ -51,6 +62,21 @@ function normalize_conversation_row(raw: RawConversationRow): ConversationRow {
         requestMessages: raw.requestMessages ?? raw.request_messages ?? '',
         requestTools: raw.requestTools ?? raw.request_tools ?? null,
         responseContent: raw.responseContent ?? raw.response_content ?? '',
+        inputTokens: raw.inputTokens ?? raw.input_tokens ?? 0,
+        outputTokens: raw.outputTokens ?? raw.output_tokens ?? 0,
+        stopReason: raw.stopReason ?? raw.stop_reason ?? '',
+        stream: raw.stream ?? false,
+        durationMs: raw.durationMs ?? raw.duration_ms ?? 0,
+    };
+}
+
+function normalize_conversation_list_item(raw: RawConversationListItem): ConversationListItem {
+    return {
+        id: raw.id,
+        createdAt: raw.createdAt ?? raw.created_at ?? '',
+        model: raw.model,
+        endpoint: raw.endpoint,
+        requestMessagesPreview: raw.requestMessagesPreview ?? raw.request_messages_preview ?? raw.request_messages ?? '',
         inputTokens: raw.inputTokens ?? raw.input_tokens ?? 0,
         outputTokens: raw.outputTokens ?? raw.output_tokens ?? 0,
         stopReason: raw.stopReason ?? raw.stop_reason ?? '',
@@ -141,13 +167,17 @@ export const api = {
         return http.get<RawConversationPage>('/conversations', { params }).then((r) => {
             const data = r.data;
             return {
-                items: data.items.map((row) => normalize_conversation_row(row)),
+                items: data.items.map((row) => normalize_conversation_list_item(row as RawConversationListItem)),
                 total: data.total,
                 page: data.page,
                 pageSize: data.pageSize ?? data.page_size ?? 20,
                 totalPages: data.totalPages ?? data.total_pages ?? 1,
             } satisfies ConversationPage;
         });
+    },
+
+    get_conversation_detail(id: string) {
+        return http.get<ConversationRow>(`/conversations/${id}`).then((r) => normalize_conversation_row(r.data));
     },
 
     get_token_stats(params?: TokenStatsQuery) {
@@ -181,8 +211,6 @@ export const api = {
     update_admin_config(req: UpdateAdminConfigRequest) {
         return http.put<AdminConfigResponse>('/config', req).then((r) => r.data);
     },
-
-    normalize_conversation_row,
 
     extract_error_message(error: unknown): string {
         if (axios.isAxiosError(error)) {

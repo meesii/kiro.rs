@@ -318,6 +318,37 @@ pub async fn update_admin_config(
     }
 }
 
+/// GET /api/admin/conversations/:id
+/// 获取单条对话的完整详情
+pub async fn get_conversation_detail(
+    State(state): State<AdminState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let db = match &state.db {
+        Some(db) => db,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AdminErrorResponse::api_error("对话数据库未配置")),
+            )
+                .into_response();
+        }
+    };
+
+    match db.get_conversation(id).await {
+        Ok(Some(row)) => Json(row).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(AdminErrorResponse::not_found("对话记录不存在"))).into_response(),
+        Err(e) => {
+            tracing::error!("查询对话详情失败: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminErrorResponse::internal_error(format!("查询失败: {}", e))),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// GET /api/admin/conversations/models
 /// 获取所有不重复的模型名称
 pub async fn get_conversation_models(

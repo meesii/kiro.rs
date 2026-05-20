@@ -23,7 +23,7 @@ pub struct ConversationRecord {
     pub duration_ms: i64,
 }
 
-/// 对话记录（查询结果）
+/// 对话记录（查询结果 - 完整详情）
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationRow {
@@ -35,6 +35,25 @@ pub struct ConversationRow {
     pub request_messages: String,
     pub request_tools: Option<String>,
     pub response_content: String,
+    pub input_tokens: i32,
+    pub output_tokens: i32,
+    pub stop_reason: String,
+    pub stream: bool,
+    pub duration_ms: i64,
+}
+
+/// 对话列表项（轻量，不含完整大文本字段）
+/// - request_messages 截断到 500 字符
+/// - 不含 system_prompt / request_tools / response_content
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationListItem {
+    pub id: String,
+    pub created_at: String,
+    pub model: String,
+    pub endpoint: String,
+    /// 截断后的请求消息（≤500 字符）
+    pub request_messages_preview: String,
     pub input_tokens: i32,
     pub output_tokens: i32,
     pub stop_reason: String,
@@ -73,11 +92,11 @@ fn default_page_size() -> u32 { 20 }
 fn default_sort_by() -> String { "created_at".to_string() }
 fn default_sort_order() -> String { "desc".to_string() }
 
-/// 分页查询结果
+/// 分页查询结果（列表轻量版）
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationPage {
-    pub items: Vec<ConversationRow>,
+    pub items: Vec<ConversationListItem>,
     pub total: u64,
     pub page: u32,
     pub page_size: u32,
@@ -281,9 +300,10 @@ impl ConversationDb {
             let offset = (page - 1) * page_size;
             let total_pages = ((total as f64) / (page_size as f64)).ceil() as u32;
 
-            // 查询数据
+            // 查询数据（轻量列表版：截断 request_messages，不含大文本字段）
+            let preview_len = 500;
             let data_sql = format!(
-                "SELECT id, created_at, model, endpoint, system_prompt, request_messages, request_tools, response_content, input_tokens, output_tokens, stop_reason, stream, duration_ms \
+                "SELECT id, created_at, model, endpoint, SUBSTR(request_messages, 1, {preview_len}), input_tokens, output_tokens, stop_reason, stream, duration_ms \
                  FROM conversations {} ORDER BY {} {} LIMIT ?{} OFFSET ?{}",
                 where_clause, sort_by, sort_order, params.len() + 1, params.len() + 2
             );
@@ -293,6 +313,42 @@ impl ConversationDb {
             let params_ref: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
             let mut stmt = conn.prepare(&data_sql)?;
             let rows = stmt.query_map(params_ref.as_slice(), |row| {
+                Ok(ConversationListItem {
+                    id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    model: row.get(2)?,
+                    endpoint: row.get(3)?,
+                    request_messages_preview: row.get(4)?,
+                    input_tokens: row.get(5)?,
+                    output_tokens: row.get(6)?,
+                    stop_reason: row.get(7)?,
+                    stream: row.get::<_, i32>(8)? != 0,
+                    duration_ms: row.get(9)?,
+                })
+            })?;
+
+            let items: Vec<ConversationListItem> = rows.filter_map(|r| r.ok()).collect();
+
+            Ok(ConversationPage {
+                items,
+                total,
+                page,
+                page_size,
+                total_pages,
+            })
+        })
+        .await?
+    }
+
+    /// 获取单条对话的完整详情
+    pub async fn get_conversation(&self, id: String) -> anyhow::Result<Option<ConversationRow>> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock();
+            let mut stmt = conn.prepare(
+                "SELECT id, created_at, model, endpoint, system_prompt, request_messages, request_tools, response_content, input_tokens, output_tokens, stop_reason, stream, duration_ms \n                 FROM conversations WHERE id = ?1"
+            )?;
+            let result = stmt.query_row(rusqlite::params![id], |row| {
                 Ok(ConversationRow {
                     id: row.get(0)?,
                     created_at: row.get(1)?,
@@ -308,17 +364,12 @@ impl ConversationDb {
                     stream: row.get::<_, i32>(11)? != 0,
                     duration_ms: row.get(12)?,
                 })
-            })?;
-
-            let items: Vec<ConversationRow> = rows.filter_map(|r| r.ok()).collect();
-
-            Ok(ConversationPage {
-                items,
-                total,
-                page,
-                page_size,
-                total_pages,
-            })
+            });
+            match result {
+                Ok(row) => Ok(Some(row)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
         })
         .await?
     }

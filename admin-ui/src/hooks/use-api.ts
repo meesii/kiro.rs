@@ -126,6 +126,14 @@ export function use_token_stats(params?: TokenStatsQuery) {
     });
 }
 
+export function use_conversation_detail(id: string | null) {
+    return useQuery({
+        queryKey: ['conversation-detail', id],
+        queryFn: () => api.get_conversation_detail(id!),
+        enabled: id !== null,
+    });
+}
+
 export function use_conversation_models() {
     return useQuery({
         queryKey: ['conversation-models'],

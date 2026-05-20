@@ -1,4 +1,3 @@
-import { api } from '@/api/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
@@ -18,9 +17,9 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
-import { use_conversation_models, use_conversations } from '@/hooks/use-api';
+import { use_conversation_detail, use_conversation_models, use_conversations } from '@/hooks/use-api';
 import { cn } from '@/lib/utils';
-import type { ConversationQuery, ConversationRow } from '@/types/api';
+import type { ConversationQuery } from '@/types/api';
 import dayjs from 'dayjs';
 import { ArrowUpDown, Clock, Loader2, MessageSquare, RefreshCw, Search, X } from 'lucide-react';
 import { useState } from 'react';
@@ -64,8 +63,6 @@ const fmt = {
 /**
  * 消息解析
  */
-const LIST_PREVIEW_LEN = 500;
-
 const msg = {
     extract_content(content: unknown): string {
         if (typeof content === 'string') return content;
@@ -90,13 +87,6 @@ const msg = {
         } catch {
             return raw;
         }
-    },
-    extract_user_input(raw: string | undefined): string {
-        const parsed = msg.parse(raw);
-        const user_msg = parsed.filter((m) => m.role === 'user').at(-1);
-        if (!user_msg) return '—';
-        const text = user_msg.content;
-        return text.length > LIST_PREVIEW_LEN ? text.slice(0, LIST_PREVIEW_LEN) + '…' : text;
     },
     parse(raw: string | undefined): ParsedMessage[] {
         if (!raw) return [];
@@ -144,7 +134,7 @@ export function ConversationsPage() {
     const [sort_order, set_sort_order] = useState('desc');
     const [search_id, set_search_id] = useState('');
 
-    const [detail_open, set_detail_open] = useState<ConversationRow | null>(null);
+    const [detail_id, set_detail_id] = useState<string | null>(null);
 
     const { data: models_data } = use_conversation_models();
 
@@ -283,13 +273,9 @@ export function ConversationsPage() {
                             </TableHeader>
                             <TableBody>
                                 {items.map((conv) => (
-                                    <TableRow
-                                        key={conv.id}
-                                        className="cursor-pointer hover:bg-muted/50"
-                                        onClick={() => set_detail_open(api.normalize_conversation_row(conv))}
-                                    >
+                                    <TableRow key={conv.id} className="cursor-pointer hover:bg-muted/50" onClick={() => set_detail_id(conv.id)}>
                                         <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{fmt.time(conv.createdAt)}</TableCell>
-                                        <TableCell className="max-w-[200px] truncate text-xs">{msg.extract_user_input(conv.requestMessages)}</TableCell>
+                                        <TableCell className="max-w-[200px] truncate text-xs">{conv.requestMessagesPreview}</TableCell>
                                         <TableCell>
                                             <Badge variant="outline" className=" text-xs">
                                                 {conv.model.length > 24 ? conv.model.slice(0, 24) + '…' : conv.model}
@@ -320,7 +306,7 @@ export function ConversationsPage() {
                                                 className="size-7"
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    set_detail_open(api.normalize_conversation_row(conv));
+                                                    set_detail_id(conv.id);
                                                 }}
                                             >
                                                 <MessageSquare className="size-3.5" />
@@ -380,9 +366,9 @@ export function ConversationsPage() {
             </Card>
 
             <ConversationDetailDialog
-                conversation={detail_open}
+                detail_id={detail_id}
                 on_open_change={(open) => {
-                    if (!open) set_detail_open(null);
+                    if (!open) set_detail_id(null);
                 }}
             />
         </div>
@@ -413,16 +399,18 @@ function DetailTextarea({ value, box_class }: { value: string; box_class?: strin
     );
 }
 
-function ConversationDetailDialog({ conversation, on_open_change }: { conversation: ConversationRow | null; on_open_change: (open: boolean) => void }) {
-    if (!conversation) return null;
+function ConversationDetailDialog({ detail_id, on_open_change }: { detail_id: string | null; on_open_change: (open: boolean) => void }) {
+    const { data: conversation, isLoading } = use_conversation_detail(detail_id);
 
-    const messages = msg.parse(conversation.requestMessages);
-    const system_text = msg.format_json_text(conversation.systemPrompt);
-    const tools_text = msg.format_json_text(conversation.requestTools);
-    const response_text = msg.format_json_text(conversation.responseContent) || conversation.responseContent || '（空）';
+    if (!detail_id) return null;
+
+    const messages = conversation ? msg.parse(conversation.requestMessages) : [];
+    const system_text = conversation ? msg.format_json_text(conversation.systemPrompt) : '';
+    const tools_text = conversation ? msg.format_json_text(conversation.requestTools) : '';
+    const response_text = conversation ? msg.format_json_text(conversation.responseContent) || conversation.responseContent || '（空）' : '（空）';
 
     return (
-        <Dialog open={!!conversation} onOpenChange={on_open_change}>
+        <Dialog open={!!detail_id} onOpenChange={on_open_change}>
             <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-3xl">
                 <DialogHeader className="shrink-0">
                     <DialogTitle className="flex items-center gap-2">
@@ -431,83 +419,91 @@ function ConversationDetailDialog({ conversation, on_open_change }: { conversati
                     </DialogTitle>
                 </DialogHeader>
 
-                <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-                    <div className="grid shrink-0 grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                        <div>
-                            <span className="text-muted-foreground">模型</span>
-                            <p className=" text-xs mt-0.5">{conversation.model}</p>
-                        </div>
-                        <div>
-                            <span className="text-muted-foreground">端点</span>
-                            <p className=" text-xs mt-0.5">{conversation.endpoint}</p>
-                        </div>
-                        <div>
-                            <span className="text-muted-foreground">耗时</span>
-                            <p className="text-xs mt-0.5">{fmt.duration(conversation.durationMs)}</p>
-                        </div>
-                        <div>
-                            <span className="text-muted-foreground">停止原因</span>
-                            <p className="mt-0.5">
-                                <StopReasonBadge reason={conversation.stopReason} />
-                            </p>
-                        </div>
-                        <div>
-                            <span className="text-muted-foreground">输入 Token</span>
-                            <p className=" text-xs mt-0.5">{fmt.tokens(conversation.inputTokens)}</p>
-                        </div>
-                        <div>
-                            <span className="text-muted-foreground">输出 Token</span>
-                            <p className=" text-xs mt-0.5">{fmt.tokens(conversation.outputTokens)}</p>
-                        </div>
-                        <div>
-                            <span className="text-muted-foreground">流式</span>
-                            <p className="text-xs mt-0.5">{conversation.stream ? '是' : '否'}</p>
-                        </div>
-                        <div>
-                            <span className="text-muted-foreground">时间</span>
-                            <p className="text-xs mt-0.5">{fmt.time(conversation.createdAt)}</p>
-                        </div>
+                {isLoading ? (
+                    <div className="flex min-h-40 items-center justify-center">
+                        <Loader2 className="size-6 animate-spin text-muted-foreground" />
                     </div>
-
-                    {system_text && (
-                        <>
-                            <Separator className="shrink-0" />
-                            <div className="flex shrink-0 flex-col gap-2">
-                                <h4 className="text-sm font-medium">系统提示词</h4>
-                                <DetailTextarea value={system_text} box_class="max-h-40" />
+                ) : !conversation ? (
+                    <div className="flex min-h-40 items-center justify-center text-muted-foreground">未找到对话记录</div>
+                ) : (
+                    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+                        <div className="grid shrink-0 grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                            <div>
+                                <span className="text-muted-foreground">模型</span>
+                                <p className=" text-xs mt-0.5">{conversation.model}</p>
                             </div>
-                        </>
-                    )}
-
-                    {tools_text && (
-                        <>
-                            <Separator className="shrink-0" />
-                            <div className="flex shrink-0 flex-col gap-2">
-                                <h4 className="text-sm font-medium">工具定义</h4>
-                                <DetailTextarea value={tools_text} box_class="max-h-40" />
+                            <div>
+                                <span className="text-muted-foreground">端点</span>
+                                <p className=" text-xs mt-0.5">{conversation.endpoint}</p>
                             </div>
-                        </>
-                    )}
+                            <div>
+                                <span className="text-muted-foreground">耗时</span>
+                                <p className=" text-xs mt-0.5">{fmt.duration(conversation.durationMs)}</p>
+                            </div>
+                            <div>
+                                <span className="text-muted-foreground">停止原因</span>
+                                <p className="mt-0.5">
+                                    <StopReasonBadge reason={conversation.stopReason} />
+                                </p>
+                            </div>
+                            <div>
+                                <span className="text-muted-foreground">输入 Token</span>
+                                <p className=" text-xs mt-0.5">{fmt.tokens(conversation.inputTokens)}</p>
+                            </div>
+                            <div>
+                                <span className="text-muted-foreground">输出 Token</span>
+                                <p className=" text-xs mt-0.5">{fmt.tokens(conversation.outputTokens)}</p>
+                            </div>
+                            <div>
+                                <span className="text-muted-foreground">流式</span>
+                                <p className="text-xs mt-0.5">{conversation.stream ? '是' : '否'}</p>
+                            </div>
+                            <div>
+                                <span className="text-muted-foreground">时间</span>
+                                <p className=" text-xs mt-0.5">{fmt.time(conversation.createdAt)}</p>
+                            </div>
+                        </div>
 
-                    <div className="flex min-h-0 max-h-80 shrink-0 flex-col gap-2 overflow-hidden">
-                        <h4 className="shrink-0 text-sm font-medium">请求消息</h4>
-                        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1  flex flex-col gap-2">
-                            {messages.map((m, i) => (
-                                <div key={i} className="flex flex-col ">
-                                    <Badge variant="outline" className="mb-1.5 text-xs uppercase">
-                                        {m.role}
-                                    </Badge>
-                                    <DetailTextarea value={m.content} />
+                        {system_text && (
+                            <>
+                                <Separator className="shrink-0" />
+                                <div className="flex shrink-0 flex-col gap-2">
+                                    <h4 className="text-sm font-medium">系统提示词</h4>
+                                    <DetailTextarea value={system_text} box_class="max-h-40" />
                                 </div>
-                            ))}
+                            </>
+                        )}
+
+                        {tools_text && (
+                            <>
+                                <Separator className="shrink-0" />
+                                <div className="flex shrink-0 flex-col gap-2">
+                                    <h4 className="text-sm font-medium">工具定义</h4>
+                                    <DetailTextarea value={tools_text} box_class="max-h-40" />
+                                </div>
+                            </>
+                        )}
+
+                        <div className="flex min-h-0 max-h-80 shrink-0 flex-col gap-2 overflow-hidden">
+                            <h4 className="shrink-0 text-sm font-medium">请求消息</h4>
+                            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1  flex flex-col gap-2">
+                                {messages.map((m, i) => (
+                                    <div key={i} className="flex flex-col ">
+                                        <Badge variant="outline" className="mb-1.5 text-xs uppercase">
+                                            {m.role}
+                                        </Badge>
+                                        <DetailTextarea value={m.content} />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+                            <h4 className="shrink-0 text-sm font-medium">响应内容</h4>
+                            <DetailTextarea value={response_text} box_class="flex-1 " />
                         </div>
                     </div>
-
-                    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
-                        <h4 className="shrink-0 text-sm font-medium">响应内容</h4>
-                        <DetailTextarea value={response_text} box_class="flex-1 " />
-                    </div>
-                </div>
+                )}
             </DialogContent>
         </Dialog>
     );
