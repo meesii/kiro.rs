@@ -349,11 +349,11 @@ pub(crate) async fn get_usage_limits(
 
     // 构建 User-Agent headers
     let user_agent = format!(
-        "aws-sdk-js/1.0.0 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhispererruntime#1.0.0 m/N,E KiroIDE-{}-{}",
+        "aws-sdk-js/1.0.39 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhispererruntime#1.0.39 m/N,E KiroIDE-{}-{}",
         os_name, node_version, kiro_version, machine_id
     );
     let amz_user_agent = format!(
-        "aws-sdk-js/1.0.0 KiroIDE-{}-{}",
+        "aws-sdk-js/1.0.39 KiroIDE-{}-{}",
         kiro_version, machine_id
     );
 

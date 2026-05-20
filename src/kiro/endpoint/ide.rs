@@ -32,14 +32,14 @@ impl IdeEndpoint {
 
     fn x_amz_user_agent(&self, ctx: &RequestContext<'_>) -> String {
         format!(
-            "aws-sdk-js/1.0.34 KiroIDE-{}-{}",
+            "aws-sdk-js/1.0.39 KiroIDE-{}-{}",
             ctx.config.kiro_version, ctx.machine_id
         )
     }
 
     fn user_agent(&self, ctx: &RequestContext<'_>) -> String {
         format!(
-            "aws-sdk-js/1.0.34 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhispererstreaming#1.0.34 m/E KiroIDE-{}-{}",
+            "aws-sdk-js/1.0.39 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhispererstreaming#1.0.39 m/E KiroIDE-{}-{}",
             ctx.config.system_version,
             ctx.config.node_version,
             ctx.config.kiro_version,
@@ -72,7 +72,6 @@ impl KiroEndpoint for IdeEndpoint {
 
     fn decorate_api(&self, req: RequestBuilder, ctx: &RequestContext<'_>) -> RequestBuilder {
         let mut req = req
-            .header("x-amzn-codewhisperer-optout", "true")
             .header("x-amzn-kiro-agent-mode", "vibe")
             .header("x-amz-user-agent", self.x_amz_user_agent(ctx))
             .header("user-agent", self.user_agent(ctx))
