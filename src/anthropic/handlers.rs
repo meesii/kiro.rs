@@ -19,6 +19,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
 use serde_json::json;
 use std::time::{Duration, Instant};
+use std::sync::atomic::Ordering;
 use tokio::time::interval;
 use uuid::Uuid;
 
@@ -31,6 +32,26 @@ use super::stream::{
 };
 use super::types::{CountTokensRequest, CountTokensResponse, ErrorResponse, MessagesRequest, Model, ModelsResponse, OutputConfig, Thinking};
 use super::websearch;
+
+/// 精简历史对话中的图片：直接移除非最后一条 user 消息中的 image 类型内容块
+fn strip_history_image_data(messages: &mut [super::types::Message]) {
+    let last_user_idx = messages.iter().rposition(|m| m.role == "user");
+    let last_user_idx = match last_user_idx {
+        Some(idx) => idx,
+        None => return,
+    };
+
+    for msg in messages[..last_user_idx].iter_mut() {
+        if msg.role != "user" {
+            continue;
+        }
+        if let Some(arr) = msg.content.as_array_mut() {
+            arr.retain(|block| {
+                block.get("type").and_then(|t| t.as_str()) != Some("image")
+            });
+        }
+    }
+}
 
 /// 将 KiroProvider 错误映射为 HTTP 响应
 fn map_provider_error(err: Error) -> Response {
@@ -212,7 +233,7 @@ pub async fn post_messages(
         "Received POST /v1/messages request"
     );
 
-    let db = state.db.clone();
+    let db = state.effective_db();
 
     // 检查 KiroProvider 是否可用
     let provider = match &state.kiro_provider {
@@ -238,6 +259,11 @@ pub async fn post_messages(
         &mut payload,
         provider.token_manager(),
     );
+
+    // 精简历史对话中的图片（用 1x1 占位图替换非最新 user 消息中的 base64 图片）
+    if state.strip_history_images.load(Ordering::Relaxed) {
+        strip_history_image_data(&mut payload.messages);
+    }
 
     // 保存替换后的请求数据用于数据库记录
     let db_system_prompt = payload.system.as_ref().and_then(|s| serde_json::to_string(s).ok());
@@ -826,7 +852,7 @@ pub async fn post_messages_cc(
         "Received POST /cc/v1/messages request"
     );
 
-    let db = state.db.clone();
+    let db = state.effective_db();
 
     // 检查 KiroProvider 是否可用
     let provider = match &state.kiro_provider {
@@ -852,6 +878,11 @@ pub async fn post_messages_cc(
         &mut payload,
         provider.token_manager(),
     );
+
+    // 精简历史对话中的图片（用 1x1 占位图替换非最新 user 消息中的 base64 图片）
+    if state.strip_history_images.load(Ordering::Relaxed) {
+        strip_history_image_data(&mut payload.messages);
+    }
 
     // 保存替换后的请求数据用于数据库记录
     let db_system_prompt = payload.system.as_ref().and_then(|s| serde_json::to_string(s).ok());

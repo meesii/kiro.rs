@@ -127,6 +127,14 @@ pub struct Config {
     #[serde(default)]
     pub db_path: Option<String>,
 
+    /// 是否启用对话记录到数据库（默认 true）
+    #[serde(default = "default_db_enabled")]
+    pub db_enabled: bool,
+
+    /// 是否精简历史对话中的图片（用 1x1 占位图替换非最新 user 消息中的 base64 图片）
+    #[serde(default = "default_strip_history_images")]
+    pub strip_history_images: bool,
+
     /// 关键词替换列表
     #[serde(default)]
     pub keyword_replacements: Vec<KeywordReplacement>,
@@ -142,6 +150,14 @@ pub struct Config {
 
 fn default_host() -> String {
     "127.0.0.1".to_string()
+}
+
+fn default_db_enabled() -> bool {
+    true
+}
+
+fn default_strip_history_images() -> bool {
+    true
 }
 
 fn default_port() -> u16 {
@@ -211,6 +227,8 @@ impl Default for Config {
             default_endpoint: default_endpoint(),
             endpoints: HashMap::new(),
             db_path: None,
+            db_enabled: default_db_enabled(),
+            strip_history_images: default_strip_history_images(),
             keyword_replacements: Vec::new(),
             keyword_replacement_enabled: false,
             config_path: None,

@@ -10,6 +10,7 @@ pub mod token;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use clap::Parser;
 use kiro::endpoint::{IdeEndpoint, KiroEndpoint};
@@ -183,12 +184,20 @@ async fn main() {
         }
     };
 
+    // 对话记录开关（共享于 AppState 和 AdminService）
+    let db_enabled = Arc::new(AtomicBool::new(config.db_enabled));
+
+    // 历史图片精简开关（共享于 AppState 和 AdminService）
+    let strip_history_images = Arc::new(AtomicBool::new(config.strip_history_images));
+
     // 构建 Anthropic API 路由（profile_arn 由 provider 层根据实际凭据动态注入）
     let anthropic_app = anthropic::create_router_with_provider(
         &api_key,
         Some(kiro_provider),
         config.extract_thinking,
         db.clone(),
+        db_enabled.clone(),
+        strip_history_images.clone(),
     );
 
     // 构建 Admin API 路由（如果配置了非空的 admin_api_key）
@@ -205,7 +214,7 @@ async fn main() {
             anthropic_app
         } else {
             let admin_service =
-                admin::AdminService::new(token_manager.clone(), endpoint_names.clone());
+                admin::AdminService::new(token_manager.clone(), endpoint_names.clone(), db_enabled.clone(), strip_history_images.clone());
             // 启动时刷新所有凭据余额
             admin_service.refresh_all_balances().await;
             let admin_state = admin::AdminState::new(admin_key, admin_service).with_db(db.clone());

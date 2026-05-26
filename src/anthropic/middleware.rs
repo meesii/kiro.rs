@@ -1,6 +1,7 @@
 //! Anthropic API 中间件
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::{
     body::Body,
@@ -28,6 +29,10 @@ pub struct AppState {
     pub extract_thinking: bool,
     /// 对话数据库（可选）
     pub db: Option<ConversationDb>,
+    /// 是否启用对话记录到数据库（运行时可切换）
+    pub db_enabled: Arc<AtomicBool>,
+    /// 是否精简历史对话中的图片（运行时可切换）
+    pub strip_history_images: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -38,6 +43,8 @@ impl AppState {
             kiro_provider: None,
             extract_thinking,
             db: None,
+            db_enabled: Arc::new(AtomicBool::new(true)),
+            strip_history_images: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -45,6 +52,15 @@ impl AppState {
     pub fn with_kiro_provider(mut self, provider: KiroProvider) -> Self {
         self.kiro_provider = Some(Arc::new(provider));
         self
+    }
+
+    /// 获取有效的 db 引用（仅当 db_enabled 为 true 时返回 Some）
+    pub fn effective_db(&self) -> Option<ConversationDb> {
+        if self.db_enabled.load(Ordering::Relaxed) {
+            self.db.clone()
+        } else {
+            None
+        }
     }
 }
 

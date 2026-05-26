@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -45,12 +46,18 @@ pub struct AdminService {
     cache_path: Option<PathBuf>,
     /// 已注册的端点名称集合（用于 add_credential 校验）
     known_endpoints: HashSet<String>,
+    /// 对话记录开关（与 AppState 共享，运行时实时生效）
+    db_enabled: Arc<AtomicBool>,
+    /// 历史图片精简开关（与 AppState 共享，运行时实时生效）
+    strip_history_images: Arc<AtomicBool>,
 }
 
 impl AdminService {
     pub fn new(
         token_manager: Arc<MultiTokenManager>,
         known_endpoints: impl IntoIterator<Item = String>,
+        db_enabled: Arc<AtomicBool>,
+        strip_history_images: Arc<AtomicBool>,
     ) -> Self {
         let cache_path = token_manager
             .cache_dir()
@@ -64,6 +71,8 @@ impl AdminService {
             balance_error_map: Mutex::new(HashMap::new()),
             cache_path,
             known_endpoints: known_endpoints.into_iter().collect(),
+            db_enabled,
+            strip_history_images,
         }
     }
 
@@ -539,6 +548,8 @@ impl AdminService {
                     load_balancing_mode: "priority".to_string(),
                     keyword_replacement_enabled: false,
                     db_path: None,
+                    db_enabled: self.db_enabled.load(Ordering::Relaxed),
+                    strip_history_images: self.strip_history_images.load(Ordering::Relaxed),
                 };
             }
         };
@@ -548,11 +559,15 @@ impl AdminService {
                 load_balancing_mode: c.load_balancing_mode,
                 keyword_replacement_enabled: c.keyword_replacement_enabled,
                 db_path: c.db_path,
+                db_enabled: c.db_enabled,
+                strip_history_images: c.strip_history_images,
             })
             .unwrap_or(AdminConfigResponse {
                 load_balancing_mode: "priority".to_string(),
                 keyword_replacement_enabled: false,
                 db_path: None,
+                db_enabled: self.db_enabled.load(Ordering::Relaxed),
+                strip_history_images: self.strip_history_images.load(Ordering::Relaxed),
             })
     }
 
@@ -581,12 +596,28 @@ impl AdminService {
                     Some(path.clone())
                 };
             }
+            if let Some(enabled) = req.db_enabled {
+                config.db_enabled = enabled;
+            }
+            if let Some(enabled) = req.strip_history_images {
+                config.strip_history_images = enabled;
+            }
             Ok(())
         })?;
 
         // 负载均衡模式变更时同步更新 token_manager 内存状态
         if let Some(ref mode) = req.load_balancing_mode {
             let _ = self.token_manager.set_load_balancing_mode(mode.clone());
+        }
+
+        // db_enabled 变更时同步更新内存中的 AtomicBool
+        if let Some(enabled) = req.db_enabled {
+            self.db_enabled.store(enabled, Ordering::Relaxed);
+        }
+
+        // strip_history_images 变更时同步更新内存中的 AtomicBool
+        if let Some(enabled) = req.strip_history_images {
+            self.strip_history_images.store(enabled, Ordering::Relaxed);
         }
 
         Ok(self.get_admin_config())

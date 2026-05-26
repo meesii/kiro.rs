@@ -303,6 +303,10 @@ pub struct AdminConfigResponse {
     pub keyword_replacement_enabled: bool,
     /// 数据库文件路径
     pub db_path: Option<String>,
+    /// 是否启用对话记录到数据库
+    pub db_enabled: bool,
+    /// 是否精简历史对话中的图片
+    pub strip_history_images: bool,
 }
 
 /// 更新 Admin 配置请求（所有字段均为可选，仅更新传入的字段）
@@ -318,6 +322,12 @@ pub struct UpdateAdminConfigRequest {
     /// 数据库文件路径
     #[serde(skip_serializing_if = "Option::is_none")]
     pub db_path: Option<String>,
+    /// 是否启用对话记录到数据库
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub db_enabled: Option<bool>,
+    /// 是否精简历史对话中的图片
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strip_history_images: Option<bool>,
 }
 
 // ============ 通用响应 ============
