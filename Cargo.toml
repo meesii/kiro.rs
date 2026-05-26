@@ -38,3 +38,4 @@ rust-embed = "8"      # 嵌入静态文件
 mime_guess = "2"      # MIME 类型推断
 rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
+md5 = "0.7"

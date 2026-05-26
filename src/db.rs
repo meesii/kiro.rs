@@ -40,6 +40,7 @@ pub struct ConversationRow {
     pub stop_reason: String,
     pub stream: bool,
     pub duration_ms: i64,
+    pub session_id: Option<String>,
 }
 
 /// 对话列表项（轻量，不含完整大文本字段）
@@ -59,6 +60,7 @@ pub struct ConversationListItem {
     pub stop_reason: String,
     pub stream: bool,
     pub duration_ms: i64,
+    pub session_id: Option<String>,
 }
 
 /// 分页查询参数
@@ -160,7 +162,25 @@ fn migrate_conversations_table(conn: &Connection) -> anyhow::Result<()> {
         )?;
         tracing::info!("已迁移 conversations 表：新增 request_tools 列");
     }
+
+    let has_session_id = conn
+        .prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'session_id'")?
+        .exists([])?;
+    if !has_session_id {
+        conn.execute("ALTER TABLE conversations ADD COLUMN session_id TEXT", [])?;
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_conversations_session_id ON conversations(session_id)")?;
+        tracing::info!("已迁移 conversations 表：新增 session_id 列");
+    }
+
     Ok(())
+}
+
+/// 从 request_messages JSON 中提取第一条 user 消息的 content，计算 MD5 作为会话标识
+fn compute_session_id(request_messages: &str) -> Option<String> {
+    let messages: Vec<serde_json::Value> = serde_json::from_str(request_messages).ok()?;
+    let first_user = messages.iter().find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))?;
+    let content = first_user.get("content")?.to_string();
+    Some(format!("{:x}", md5::compute(content.as_bytes())))
 }
 
 impl ConversationDb {
@@ -211,10 +231,11 @@ impl ConversationDb {
     pub async fn save_conversation(&self, record: ConversationRecord) {
         let conn = self.conn.clone();
         let result = tokio::task::spawn_blocking(move || {
+            let session_id = compute_session_id(&record.request_messages);
             let conn = conn.lock();
             conn.execute(
-                "INSERT INTO conversations (id, model, endpoint, system_prompt, request_messages, request_tools, response_content, input_tokens, output_tokens, stop_reason, stream, duration_ms)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO conversations (id, model, endpoint, system_prompt, request_messages, request_tools, response_content, input_tokens, output_tokens, stop_reason, stream, duration_ms, session_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 rusqlite::params![
                     record.id,
                     record.model,
@@ -228,6 +249,7 @@ impl ConversationDb {
                     record.stop_reason,
                     record.stream as i32,
                     record.duration_ms,
+                    session_id,
                 ],
             )
         })
@@ -303,7 +325,7 @@ impl ConversationDb {
             // 查询数据（轻量列表版：截断 request_messages，不含大文本字段）
             let preview_len = 500;
             let data_sql = format!(
-                "SELECT id, created_at, model, endpoint, SUBSTR(request_messages, 1, {preview_len}), input_tokens, output_tokens, stop_reason, stream, duration_ms \
+                "SELECT id, created_at, model, endpoint, SUBSTR(request_messages, 1, {preview_len}), input_tokens, output_tokens, stop_reason, stream, duration_ms, session_id \
                  FROM conversations {} ORDER BY {} {} LIMIT ?{} OFFSET ?{}",
                 where_clause, sort_by, sort_order, params.len() + 1, params.len() + 2
             );
@@ -324,6 +346,7 @@ impl ConversationDb {
                     stop_reason: row.get(7)?,
                     stream: row.get::<_, i32>(8)? != 0,
                     duration_ms: row.get(9)?,
+                    session_id: row.get(10)?,
                 })
             })?;
 
@@ -346,7 +369,8 @@ impl ConversationDb {
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock();
             let mut stmt = conn.prepare(
-                "SELECT id, created_at, model, endpoint, system_prompt, request_messages, request_tools, response_content, input_tokens, output_tokens, stop_reason, stream, duration_ms \n                 FROM conversations WHERE id = ?1"
+                "SELECT id, created_at, model, endpoint, system_prompt, request_messages, request_tools, response_content, input_tokens, output_tokens, stop_reason, stream, duration_ms, session_id \
+                 FROM conversations WHERE id = ?1"
             )?;
             let result = stmt.query_row(rusqlite::params![id], |row| {
                 Ok(ConversationRow {
@@ -363,6 +387,7 @@ impl ConversationDb {
                     stop_reason: row.get(10)?,
                     stream: row.get::<_, i32>(11)? != 0,
                     duration_ms: row.get(12)?,
+                    session_id: row.get(13)?,
                 })
             });
             match result {

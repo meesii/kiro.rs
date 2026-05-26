@@ -35,6 +35,7 @@ type RawConversationRow = ConversationRow & {
     output_tokens?: number;
     stop_reason?: string;
     duration_ms?: number;
+    session_id?: string | null;
 };
 
 type RawConversationListItem = ConversationListItem & {
@@ -45,6 +46,7 @@ type RawConversationListItem = ConversationListItem & {
     output_tokens?: number;
     stop_reason?: string;
     duration_ms?: number;
+    session_id?: string | null;
 };
 
 type RawConversationPage = ConversationPage & {
@@ -67,6 +69,7 @@ function normalize_conversation_row(raw: RawConversationRow): ConversationRow {
         stopReason: raw.stopReason ?? raw.stop_reason ?? '',
         stream: raw.stream ?? false,
         durationMs: raw.durationMs ?? raw.duration_ms ?? 0,
+        sessionId: raw.sessionId ?? raw.session_id ?? null,
     };
 }
 
@@ -82,6 +85,7 @@ function normalize_conversation_list_item(raw: RawConversationListItem): Convers
         stopReason: raw.stopReason ?? raw.stop_reason ?? '',
         stream: raw.stream ?? false,
         durationMs: raw.durationMs ?? raw.duration_ms ?? 0,
+        sessionId: raw.sessionId ?? raw.session_id ?? null,
     };
 }
 

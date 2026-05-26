@@ -142,6 +142,7 @@ export interface ConversationListItem {
     stopReason: string;
     stream: boolean;
     durationMs: number;
+    sessionId: string | null;
 }
 
 /** 对话完整详情（由详情接口返回） */
@@ -159,6 +160,7 @@ export interface ConversationRow {
     stopReason: string;
     stream: boolean;
     durationMs: number;
+    sessionId: string | null;
 }
 
 export interface ConversationPage {

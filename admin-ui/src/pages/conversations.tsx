@@ -341,6 +341,7 @@ export function ConversationsPage() {
                                         <Checkbox checked={all_selected} onCheckedChange={toggle_select_all} />
                                     </TableHead>
                                     <TableHead className="w-[150px]">时间</TableHead>
+                                    <TableHead className="w-[100px]">会话 ID</TableHead>
                                     <TableHead className="max-w-[200px]">用户输入</TableHead>
                                     <TableHead>模型</TableHead>
                                     <TableHead className="w-24">输入</TableHead>
@@ -358,6 +359,7 @@ export function ConversationsPage() {
                                             <Checkbox checked={selected_ids.has(conv.id)} onCheckedChange={() => toggle_select(conv.id)} />
                                         </TableCell>
                                         <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{fmt.time(conv.createdAt)}</TableCell>
+                                        <TableCell className="text-muted-foreground text-xs font-mono">{conv.sessionId ? conv.sessionId.slice(0, 8) : '—'}</TableCell>
                                         <TableCell className="max-w-[200px] truncate text-xs">{conv.requestMessagesPreview}</TableCell>
                                         <TableCell>
                                             <Badge variant="outline" className=" text-xs">
@@ -399,7 +401,7 @@ export function ConversationsPage() {
                                 ))}
                                 {items.length === 0 && (
                                     <TableRow>
-                                        <TableCell colSpan={10} className="h-32 text-center text-muted-foreground">
+                                        <TableCell colSpan={11} className="h-32 text-center text-muted-foreground">
                                             暂无对话记录
                                         </TableCell>
                                     </TableRow>
