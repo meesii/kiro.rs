@@ -11,8 +11,8 @@ use super::{
     middleware::AdminState,
     types::{
         AddCredentialRequest, AddKeywordReplacementRequest, AdminErrorResponse,
-        SetDisabledRequest, SetEmailRequest, SetMachineIdRequest, SetPriorityRequest,
-        SetProxyRequest, SuccessResponse, UpdateAdminConfigRequest,
+        DeleteConversationsRequest, SetDisabledRequest, SetEmailRequest, SetMachineIdRequest,
+        SetPriorityRequest, SetProxyRequest, SuccessResponse, UpdateAdminConfigRequest,
         UpdateKeywordReplacementRequest,
     },
 };
@@ -372,6 +372,73 @@ pub async fn get_conversation_models(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(AdminErrorResponse::internal_error(format!("查询失败: {}", e))),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// DELETE /api/admin/conversations
+/// 批量删除对话记录（传入 id 数组）
+pub async fn delete_conversations(
+    State(state): State<AdminState>,
+    Json(payload): Json<DeleteConversationsRequest>,
+) -> impl IntoResponse {
+    let db = match &state.db {
+        Some(db) => db,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AdminErrorResponse::api_error("对话数据库未配置")),
+            )
+                .into_response();
+        }
+    };
+
+    if payload.ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(AdminErrorResponse::api_error("ids 不能为空")),
+        )
+            .into_response();
+    }
+
+    match db.delete_conversations(payload.ids).await {
+        Ok(deleted) => Json(SuccessResponse::new(format!("已删除 {} 条对话记录", deleted))).into_response(),
+        Err(e) => {
+            tracing::error!("批量删除对话记录失败: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminErrorResponse::internal_error(format!("删除失败: {}", e))),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// POST /api/admin/conversations/clear
+/// 清空所有对话记录
+pub async fn clear_conversations(
+    State(state): State<AdminState>,
+) -> impl IntoResponse {
+    let db = match &state.db {
+        Some(db) => db,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(AdminErrorResponse::api_error("对话数据库未配置")),
+            )
+                .into_response();
+        }
+    };
+
+    match db.clear_conversations().await {
+        Ok(deleted) => Json(SuccessResponse::new(format!("已清空全部 {} 条对话记录", deleted))).into_response(),
+        Err(e) => {
+            tracing::error!("清空对话记录失败: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminErrorResponse::internal_error(format!("清空失败: {}", e))),
             )
                 .into_response()
         }

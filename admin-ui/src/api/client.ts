@@ -188,6 +188,14 @@ export const api = {
         return http.get<ConversationModelsResponse>('/conversations/models').then((r) => r.data);
     },
 
+    delete_conversations(ids: string[]) {
+        return http.delete<SuccessResponse>('/conversations', { data: { ids } }).then((r) => r.data);
+    },
+
+    clear_conversations() {
+        return http.post<SuccessResponse>('/conversations/clear').then((r) => r.data);
+    },
+
     get_keyword_replacements() {
         return http.get<KeywordReplacementsResponse>('/config/keyword-replacements').then((r) => r.data);
     },

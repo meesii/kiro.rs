@@ -7,13 +7,13 @@ use axum::{
 
 use super::{
     handlers::{
-        add_credential, add_keyword_replacement, delete_credential, delete_keyword_replacement,
-        force_refresh_balance, force_refresh_token, get_admin_config, get_all_credentials,
-        get_conversation_detail, get_conversation_models, get_conversation_stats, get_conversations,
-        get_credential_balance, get_keyword_replacements, reset_failure_count,
-        set_credential_disabled, set_credential_email, set_credential_machine_id,
-        set_credential_priority, set_credential_proxy,
-        update_admin_config, update_keyword_replacement,
+        add_credential, add_keyword_replacement, clear_conversations, delete_conversations,
+        delete_credential, delete_keyword_replacement, force_refresh_balance, force_refresh_token,
+        get_admin_config, get_all_credentials, get_conversation_detail, get_conversation_models,
+        get_conversation_stats, get_conversations, get_credential_balance,
+        get_keyword_replacements, reset_failure_count, set_credential_disabled,
+        set_credential_email, set_credential_machine_id, set_credential_priority,
+        set_credential_proxy, update_admin_config, update_keyword_replacement,
     },
     middleware::{AdminState, admin_auth_middleware},
 };
@@ -65,7 +65,8 @@ pub fn create_admin_router(state: AdminState) -> Router {
             "/config",
             get(get_admin_config).put(update_admin_config),
         )
-        .route("/conversations", get(get_conversations))
+        .route("/conversations", get(get_conversations).delete(delete_conversations))
+        .route("/conversations/clear", post(clear_conversations))
         .route("/conversations/{id}", get(get_conversation_detail))
         .route("/conversations/stats", get(get_conversation_stats))
         .route("/conversations/models", get(get_conversation_models))

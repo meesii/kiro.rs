@@ -374,6 +374,38 @@ impl ConversationDb {
         .await?
     }
 
+    /// 批量删除对话记录并执行 VACUUM
+    pub async fn delete_conversations(&self, ids: Vec<String>) -> anyhow::Result<u64> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock();
+            let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+            let sql = format!(
+                "DELETE FROM conversations WHERE id IN ({})",
+                placeholders.join(", ")
+            );
+            let params: Vec<&dyn rusqlite::types::ToSql> =
+                ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+            let deleted = conn.execute(&sql, params.as_slice())?;
+            conn.execute_batch("VACUUM")?;
+            Ok(deleted as u64)
+        })
+        .await?
+    }
+
+    /// 清空所有对话记录并执行 VACUUM
+    pub async fn clear_conversations(&self) -> anyhow::Result<u64> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock();
+            let deleted: u64 = conn.query_row("SELECT COUNT(*) FROM conversations", [], |row| row.get(0))?;
+            conn.execute("DELETE FROM conversations", [])?;
+            conn.execute_batch("VACUUM")?;
+            Ok(deleted)
+        })
+        .await?
+    }
+
     /// 获取所有不重复的模型名称
     pub async fn query_models(&self) -> anyhow::Result<ConversationModelsResponse> {
         let conn = self.conn.clone();

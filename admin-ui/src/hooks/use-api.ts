@@ -142,6 +142,30 @@ export function use_conversation_models() {
     });
 }
 
+export function use_delete_conversations() {
+    const qc = useQueryClient();
+    return useMutation({
+        mutationFn: (ids: string[]) => api.delete_conversations(ids),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['conversations'] });
+            qc.invalidateQueries({ queryKey: ['conversation-models'] });
+            qc.invalidateQueries({ queryKey: ['token-stats'] });
+        },
+    });
+}
+
+export function use_clear_conversations() {
+    const qc = useQueryClient();
+    return useMutation({
+        mutationFn: () => api.clear_conversations(),
+        onSuccess: () => {
+            qc.invalidateQueries({ queryKey: ['conversations'] });
+            qc.invalidateQueries({ queryKey: ['conversation-models'] });
+            qc.invalidateQueries({ queryKey: ['token-stats'] });
+        },
+    });
+}
+
 export function use_keyword_replacements() {
     return useQuery({
         queryKey: ['keyword-replacements'],

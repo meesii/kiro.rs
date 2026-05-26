@@ -381,3 +381,9 @@ impl AdminErrorResponse {
         Self::new("internal_error", message)
     }
 }
+
+/// 批量删除对话记录请求
+#[derive(Debug, Deserialize)]
+pub struct DeleteConversationsRequest {
+    pub ids: Vec<String>,
+}

@@ -1,7 +1,8 @@
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
     Pagination,
@@ -17,12 +18,13 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
-import { use_conversation_detail, use_conversation_models, use_conversations } from '@/hooks/use-api';
+import { use_clear_conversations, use_conversation_detail, use_conversation_models, use_conversations, use_delete_conversations } from '@/hooks/use-api';
 import { cn } from '@/lib/utils';
 import type { ConversationQuery } from '@/types/api';
 import dayjs from 'dayjs';
-import { ArrowUpDown, Clock, Loader2, MessageSquare, RefreshCw, Search, X } from 'lucide-react';
+import { ArrowUpDown, Clock, Loader2, MessageSquare, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
+import { toast } from 'sonner';
 
 const SORT_OPTIONS = [
     { value: 'created_at', label: '时间' },
@@ -135,8 +137,13 @@ export function ConversationsPage() {
     const [search_id, set_search_id] = useState('');
 
     const [detail_id, set_detail_id] = useState<string | null>(null);
+    const [selected_ids, set_selected_ids] = useState<Set<string>>(new Set());
+    const [confirm_delete, set_confirm_delete] = useState(false);
+    const [confirm_clear, set_confirm_clear] = useState(false);
 
     const { data: models_data } = use_conversation_models();
+    const delete_mutation = use_delete_conversations();
+    const clear_mutation = use_clear_conversations();
 
     const query: ConversationQuery = {
         page,
@@ -154,6 +161,64 @@ export function ConversationsPage() {
     const range_start = total === 0 ? 0 : (page - 1) * page_size + 1;
     const range_end = total === 0 ? 0 : Math.min(page * page_size, total);
     const items = data?.items?.filter((item) => !search_id || item.id.includes(search_id)) ?? [];
+
+    const all_selected = items.length > 0 && items.every((item) => selected_ids.has(item.id));
+    const some_selected = selected_ids.size > 0;
+
+    function toggle_select(id: string) {
+        set_selected_ids((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    }
+
+    function toggle_select_all() {
+        if (all_selected) {
+            set_selected_ids((prev) => {
+                const next = new Set(prev);
+                for (const item of items) next.delete(item.id);
+                return next;
+            });
+        } else {
+            set_selected_ids((prev) => {
+                const next = new Set(prev);
+                for (const item of items) next.add(item.id);
+                return next;
+            });
+        }
+    }
+
+    function handle_delete_selected() {
+        const ids = Array.from(selected_ids);
+        delete_mutation.mutate(ids, {
+            onSuccess: (res) => {
+                toast.success(res.message);
+                set_selected_ids(new Set());
+                set_confirm_delete(false);
+            },
+            onError: (err) => {
+                toast.error(`删除失败: ${err instanceof Error ? err.message : '未知错误'}`);
+                set_confirm_delete(false);
+            },
+        });
+    }
+
+    function handle_clear_all() {
+        clear_mutation.mutate(undefined, {
+            onSuccess: (res) => {
+                toast.success(res.message);
+                set_selected_ids(new Set());
+                set_confirm_clear(false);
+                set_page(1);
+            },
+            onError: (err) => {
+                toast.error(`清空失败: ${err instanceof Error ? err.message : '未知错误'}`);
+                set_confirm_clear(false);
+            },
+        });
+    }
 
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-4 p-6">
@@ -228,6 +293,18 @@ export function ConversationsPage() {
                     刷新
                 </Button>
 
+                {some_selected && (
+                    <Button variant="destructive" size="default" onClick={() => set_confirm_delete(true)}>
+                        <Trash2 className="mr-1.5 size-4" />
+                        删除选中 ({selected_ids.size})
+                    </Button>
+                )}
+
+                <Button variant="outline" size="default" className="text-destructive hover:text-destructive" onClick={() => set_confirm_clear(true)} disabled={total === 0}>
+                    <Trash2 className="mr-1.5 size-4" />
+                    清空全部
+                </Button>
+
                 {(model || stream) && (
                     <Button
                         variant="ghost"
@@ -260,6 +337,9 @@ export function ConversationsPage() {
                         <Table>
                             <TableHeader className="sticky top-0 z-10 bg-card [&_tr]:border-b">
                                 <TableRow>
+                                    <TableHead className="w-10">
+                                        <Checkbox checked={all_selected} onCheckedChange={toggle_select_all} />
+                                    </TableHead>
                                     <TableHead className="w-[150px]">时间</TableHead>
                                     <TableHead className="max-w-[200px]">用户输入</TableHead>
                                     <TableHead>模型</TableHead>
@@ -274,6 +354,9 @@ export function ConversationsPage() {
                             <TableBody>
                                 {items.map((conv) => (
                                     <TableRow key={conv.id} className="cursor-pointer hover:bg-muted/50" onClick={() => set_detail_id(conv.id)}>
+                                        <TableCell onClick={(e) => e.stopPropagation()}>
+                                            <Checkbox checked={selected_ids.has(conv.id)} onCheckedChange={() => toggle_select(conv.id)} />
+                                        </TableCell>
                                         <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{fmt.time(conv.createdAt)}</TableCell>
                                         <TableCell className="max-w-[200px] truncate text-xs">{conv.requestMessagesPreview}</TableCell>
                                         <TableCell>
@@ -316,7 +399,7 @@ export function ConversationsPage() {
                                 ))}
                                 {items.length === 0 && (
                                     <TableRow>
-                                        <TableCell colSpan={9} className="h-32 text-center text-muted-foreground">
+                                        <TableCell colSpan={10} className="h-32 text-center text-muted-foreground">
                                             暂无对话记录
                                         </TableCell>
                                     </TableRow>
@@ -371,6 +454,46 @@ export function ConversationsPage() {
                     if (!open) set_detail_id(null);
                 }}
             />
+
+            <Dialog open={confirm_delete} onOpenChange={set_confirm_delete}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>确认删除</DialogTitle>
+                        <DialogDescription>
+                            确定要删除选中的 {selected_ids.size} 条对话记录吗？此操作不可撤销。
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => set_confirm_delete(false)} disabled={delete_mutation.isPending}>
+                            取消
+                        </Button>
+                        <Button variant="destructive" onClick={handle_delete_selected} disabled={delete_mutation.isPending}>
+                            {delete_mutation.isPending && <Loader2 className="mr-1.5 size-4 animate-spin" />}
+                            确认删除
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={confirm_clear} onOpenChange={set_confirm_clear}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>确认清空</DialogTitle>
+                        <DialogDescription>
+                            确定要清空全部 {total.toLocaleString()} 条对话记录吗？此操作不可撤销，数据库文件将被压缩。
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => set_confirm_clear(false)} disabled={clear_mutation.isPending}>
+                            取消
+                        </Button>
+                        <Button variant="destructive" onClick={handle_clear_all} disabled={clear_mutation.isPending}>
+                            {clear_mutation.isPending && <Loader2 className="mr-1.5 size-4 animate-spin" />}
+                            确认清空
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
