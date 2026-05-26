@@ -218,10 +218,14 @@ export interface AdminConfigResponse {
     loadBalancingMode: string;
     keywordReplacementEnabled: boolean;
     dbPath: string | null;
+    dbEnabled: boolean;
+    stripHistoryImages: boolean;
 }
 
 export interface UpdateAdminConfigRequest {
     loadBalancingMode?: string;
     keywordReplacementEnabled?: boolean;
     dbPath?: string;
+    dbEnabled?: boolean;
+    stripHistoryImages?: boolean;
 }

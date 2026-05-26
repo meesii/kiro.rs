@@ -18,7 +18,7 @@ import {
 } from '@/hooks/use-api';
 import { cn } from '@/lib/utils';
 import type { KeywordReplacementItem } from '@/types/api';
-import { Database, Pencil, Plus, Scale, Trash2, Zap } from 'lucide-react';
+import { Database, ImageOff, Pencil, Plus, Scale, Trash2, Zap } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -56,74 +56,79 @@ export function SettingsPage() {
                 <p className="text-muted-foreground">配置您的 Kiro 实例</p>
             </div>
 
-            <Card className="max-w-lg">
-                <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                        负载均衡
-                        {isLoading ? (
-                            <Skeleton className="h-5 w-16" />
-                        ) : (
-                            <Badge variant={is_balanced ? 'default' : 'secondary'}>{fmt.mode_label[current_mode] ?? current_mode}</Badge>
-                        )}
-                    </CardTitle>
-                    <CardDescription>控制如何为传入请求选择凭证</CardDescription>
-                </CardHeader>
-                <CardContent>
-                    <div className="grid grid-cols-1 gap-3">
-                        <button
-                            type="button"
-                            disabled={isLoading || update_config.isPending}
-                            onClick={() => handle_toggle_mode(true)}
-                            className={cn(
-                                'flex items-center gap-3 rounded-lg border p-4 text-left transition-all',
-                                'hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-50',
-                                is_balanced ? 'ring-1 ring-primary bg-primary/5' : 'border-border'
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            负载均衡
+                            {isLoading ? (
+                                <Skeleton className="h-5 w-16" />
+                            ) : (
+                                <Badge variant={is_balanced ? 'default' : 'secondary'}>{fmt.mode_label[current_mode] ?? current_mode}</Badge>
                             )}
-                        >
-                            <Scale className={cn('size-5 shrink-0', is_balanced ? 'text-primary' : 'text-muted-foreground')} />
-                            <div className="min-w-0 flex-1">
-                                <p className="text-sm font-medium">均衡模式</p>
-                                <p className="text-muted-foreground text-xs">在所有可用凭证之间均匀分配请求</p>
-                            </div>
-                            <span
+                        </CardTitle>
+                        <CardDescription>控制如何为传入请求选择凭证</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="grid grid-cols-1 gap-3">
+                            <button
+                                type="button"
+                                disabled={isLoading || update_config.isPending}
+                                onClick={() => handle_toggle_mode(true)}
                                 className={cn(
-                                    'ml-auto flex size-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors',
-                                    is_balanced ? 'border-transparent bg-primary' : 'border-muted-foreground/30'
+                                    'flex items-center gap-3 rounded-lg border px-4 py-2.5  text-left transition-all',
+                                    'hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-50',
+                                    is_balanced ? 'ring-1 ring-primary bg-primary/5' : 'border-border'
                                 )}
                             >
-                                {is_balanced && <span className="size-2 rounded-full bg-primary-foreground" />}
-                            </span>
-                        </button>
+                                <Scale className={cn('size-5 shrink-0', is_balanced ? 'text-primary' : 'text-muted-foreground')} />
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium">均衡模式</p>
+                                    <p className="text-muted-foreground text-xs">在所有可用凭证之间均匀分配请求</p>
+                                </div>
+                                <span
+                                    className={cn(
+                                        'ml-auto flex size-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors',
+                                        is_balanced ? 'border-transparent bg-primary' : 'border-muted-foreground/30'
+                                    )}
+                                >
+                                    {is_balanced && <span className="size-2 rounded-full bg-primary-foreground" />}
+                                </span>
+                            </button>
 
-                        <button
-                            type="button"
-                            disabled={isLoading || update_config.isPending}
-                            onClick={() => handle_toggle_mode(false)}
-                            className={cn(
-                                'flex items-center gap-3 rounded-lg border p-4 text-left transition-all',
-                                'hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-50',
-                                !is_balanced ? 'ring-1 ring-primary bg-primary/5' : 'border border-border'
-                            )}
-                        >
-                            <Zap className={cn('size-5 shrink-0', !is_balanced ? 'text-primary' : 'text-muted-foreground')} />
-                            <div className="min-w-0 flex-1">
-                                <p className="text-sm font-medium">优先级模式</p>
-                                <p className="text-muted-foreground text-xs">按优先级顺序使用凭证，优先级高的优先使用</p>
-                            </div>
-                            <span
+                            <button
+                                type="button"
+                                disabled={isLoading || update_config.isPending}
+                                onClick={() => handle_toggle_mode(false)}
                                 className={cn(
-                                    'ml-auto flex size-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors',
-                                    !is_balanced ? 'border-transparent bg-primary' : 'border-muted-foreground/30'
+                                    'flex items-center gap-3 rounded-lg border px-4 py-2.5 text-left transition-all',
+                                    'hover:border-primary/50 disabled:cursor-not-allowed disabled:opacity-50',
+                                    !is_balanced ? 'ring-1 ring-primary bg-primary/5' : 'border border-border'
                                 )}
                             >
-                                {!is_balanced && <span className="size-2 rounded-full bg-primary-foreground" />}
-                            </span>
-                        </button>
-                    </div>
-                </CardContent>
-            </Card>
+                                <Zap className={cn('size-5 shrink-0', !is_balanced ? 'text-primary' : 'text-muted-foreground')} />
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium">优先级模式</p>
+                                    <p className="text-muted-foreground text-xs">按优先级顺序使用凭证，优先级高的优先使用</p>
+                                </div>
+                                <span
+                                    className={cn(
+                                        'ml-auto flex size-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors',
+                                        !is_balanced ? 'border-transparent bg-primary' : 'border-muted-foreground/30'
+                                    )}
+                                >
+                                    {!is_balanced && <span className="size-2 rounded-full bg-primary-foreground" />}
+                                </span>
+                            </button>
+                        </div>
+                    </CardContent>
+                </Card>
 
-            <DatabasePathCard />
+                <div className="flex flex-col gap-6">
+                    <DatabasePathCard />
+                    <StripHistoryImagesCard />
+                </div>
+            </div>
 
             <KeywordReplacementsCard />
         </div>
@@ -243,7 +248,7 @@ function KeywordReplacementsCard() {
 
     return (
         <>
-            <Card className="max-w-lg">
+            <Card>
                 <CardHeader>
                     <div className="flex items-center justify-between">
                         <div>
@@ -397,6 +402,7 @@ function DatabasePathCard() {
     const [value, set_value] = useState('');
 
     const db_path = data?.dbPath ?? null;
+    const db_enabled = data?.dbEnabled ?? true;
 
     const start_edit = () => {
         set_value(db_path ?? '');
@@ -419,14 +425,34 @@ function DatabasePathCard() {
         }
     };
 
+    const handle_toggle_db_enabled = async (checked: boolean) => {
+        try {
+            await update_config.mutateAsync({ dbEnabled: checked });
+            toast.success(checked ? '对话记录已开启' : '对话记录已关闭');
+        } catch (e) {
+            toast.error(api.extract_error_message(e));
+        }
+    };
+
     return (
-        <Card className="max-w-lg">
+        <Card className="flex-1">
             <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                    <Database className="size-4" />
-                    对话记录数据库
-                </CardTitle>
-                <CardDescription>SQLite 数据库文件的存储路径</CardDescription>
+                <div className="flex items-center justify-between">
+                    <div>
+                        <CardTitle className="flex items-center gap-2">
+                            <Database className="size-4" />
+                            对话记录数据库
+                        </CardTitle>
+                        <CardDescription>SQLite 数据库文件的存储路径</CardDescription>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                        {isLoading ? (
+                            <Skeleton className="h-5 w-9" />
+                        ) : (
+                            <Switch checked={db_enabled} onCheckedChange={handle_toggle_db_enabled} disabled={update_config.isPending} />
+                        )}
+                    </div>
+                </div>
             </CardHeader>
             <CardContent>
                 {isLoading ? (
@@ -453,6 +479,48 @@ function DatabasePathCard() {
                     </div>
                 )}
             </CardContent>
+        </Card>
+    );
+}
+
+/**
+ * 历史图片精简卡片
+ */
+function StripHistoryImagesCard() {
+    const { data, isLoading } = use_admin_config();
+    const update_config = use_update_admin_config();
+
+    const strip_enabled = data?.stripHistoryImages ?? true;
+
+    const handle_toggle = async (checked: boolean) => {
+        try {
+            await update_config.mutateAsync({ stripHistoryImages: checked });
+            toast.success(checked ? '历史图片精简已开启' : '历史图片精简已关闭');
+        } catch (e) {
+            toast.error(api.extract_error_message(e));
+        }
+    };
+
+    return (
+        <Card>
+            <CardHeader className="">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <CardTitle className="flex items-center gap-2">
+                            <ImageOff className="size-4" />
+                            历史图片精简
+                        </CardTitle>
+                        <CardDescription>去除历史对话中的图片以节省 Token</CardDescription>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                        {isLoading ? (
+                            <Skeleton className="h-5 w-9" />
+                        ) : (
+                            <Switch checked={strip_enabled} onCheckedChange={handle_toggle} disabled={update_config.isPending} />
+                        )}
+                    </div>
+                </div>
+            </CardHeader>
         </Card>
     );
 }
