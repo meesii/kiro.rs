@@ -1,0 +1,18 @@
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates
+
+WORKDIR /app
+
+# 将你本地编译好的二进制文件复制到容器中
+# 假设你已经将 kiro-rs 二进制文件放在了与此 Dockerfile 同级的目录下
+COPY kiro-rs /app/kiro-rs
+
+# 赋予可执行权限
+RUN chmod +x /app/kiro-rs
+
+VOLUME ["/app/config"]
+
+EXPOSE 8990
+
+CMD ["./kiro-rs", "-c", "/app/config/config.json", "--credentials", "/app/config/credentials.json"]
